@@ -1,29 +1,23 @@
-import express from "express";
+import { Router } from "express";
 import db from "../db.js";
+import auth from "../middlewares/auth.js";
 
-const router = express.Router();
+const router = Router();
 
-router.get("/", async (_, res) => {
-  const r = await db.query(`
-    SELECT e.*, p.nome
-    FROM estoque e
-    JOIN produtos p ON p.id = e.produto_id
-  `);
-  res.json(r.rows);
+router.get("/", auth, async (req, res) => {
+  const result = await db.query("SELECT * FROM produtos");
+  res.json(result.rows);
 });
 
-router.post("/", async (req, res) => {
-  const { produto_id, quantidade_arara, quantidade_deposito } = req.body;
+router.post("/", auth, async (req, res) => {
+  const { nome, preco, categoria_id } = req.body;
 
-  const r = await db.query(
-    `INSERT INTO estoque
-     (produto_id, quantidade_arara, quantidade_deposito)
-     VALUES ($1,$2,$3)
-     RETURNING *`,
-    [produto_id, quantidade_arara, quantidade_deposito]
+  await db.query(
+    "INSERT INTO produtos (nome, preco, categoria_id) VALUES ($1,$2,$3)",
+    [nome, preco, categoria_id]
   );
 
-  res.status(201).json(r.rows[0]);
+  res.json({ ok: true });
 });
 
 export default router;

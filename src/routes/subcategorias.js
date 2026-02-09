@@ -1,25 +1,21 @@
-import express from "express";
+import { Router } from "express";
 import db from "../db.js";
+import auth from "../middlewares/auth.js";
 
-const router = express.Router();
+const router = Router();
 
-router.get("/", async (_, res) => {
-  const r = await db.query(`
-    SELECT s.*, c.nome AS categoria
-    FROM subcategorias s
-    JOIN categorias c ON c.id = s.categoria_id
-  `);
-  res.json(r.rows);
+router.get("/", auth, async (req, res) => {
+  const result = await db.query("SELECT * FROM subcategorias");
+  res.json(result.rows);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", auth, async (req, res) => {
   const { nome, categoria_id } = req.body;
-
-  const r = await db.query(
-    "INSERT INTO subcategorias (nome, categoria_id) VALUES ($1,$2) RETURNING *",
+  await db.query(
+    "INSERT INTO subcategorias (nome, categoria_id) VALUES ($1,$2)",
     [nome, categoria_id]
   );
-  res.status(201).json(r.rows[0]);
+  res.json({ ok: true });
 });
 
 export default router;

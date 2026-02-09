@@ -1,35 +1,25 @@
-import express from "express";
+import { Router } from "express";
 import db from "../db.js";
+import auth from "../middlewares/auth.js";
 
-const router = express.Router();
+const router = Router();
 
-router.post("/", async (req, res) => {
-  const { vendedora_id, itens } = req.body;
+router.post("/", auth, async (req, res) => {
+  const { itens, total } = req.body;
 
   const venda = await db.query(
-    "INSERT INTO vendas (vendedora_id, data, valor_total) VALUES ($1, NOW(), 0) RETURNING *",
-    [vendedora_id]
+    "INSERT INTO vendas (valor_total) VALUES ($1) RETURNING id",
+    [total]
   );
 
-  let total = 0;
-
   for (const item of itens) {
-    total += item.quantidade * item.preco_unitario;
-
     await db.query(
-      `INSERT INTO venda_itens
-       (venda_id, produto_id, quantidade, preco_unitario)
-       VALUES ($1,$2,$3,$4)`,
-      [venda.rows[0].id, item.produto_id, item.quantidade, item.preco_unitario]
+      "INSERT INTO venda_itens (venda_id, produto_id, quantidade, preco_unitario) VALUES ($1,$2,$3,$4)",
+      [venda.rows[0].id, item.produto_id, item.qtd, item.preco]
     );
   }
 
-  await db.query(
-    "UPDATE vendas SET valor_total=$1 WHERE id=$2",
-    [total, venda.rows[0].id]
-  );
-
-  res.status(201).json({ venda_id: venda.rows[0].id, total });
+  res.json({ ok: true });
 });
 
 export default router;

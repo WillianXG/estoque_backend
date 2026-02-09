@@ -1,20 +1,20 @@
-import express from "express";
+import { Router } from "express";
 import db from "../db.js";
+import auth from "../middlewares/auth.js";
 
-const router = express.Router();
+const router = Router();
 
-router.get("/", async (_, res) => {
-  const r = await db.query("SELECT * FROM categorias ORDER BY nome");
-  res.json(r.rows);
+router.get("/", auth, async (req, res) => {
+  const result = await db.query("SELECT * FROM categorias ORDER BY nome");
+  res.json(result.rows);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", auth, async (req, res) => {
   const { nome } = req.body;
-  const r = await db.query(
-    "INSERT INTO categorias (nome) VALUES ($1) RETURNING *",
-    [nome]
-  );
-  res.status(201).json(r.rows[0]);
+  if (!nome) return res.status(400).json({ erro: "Nome obrigatório" });
+
+  await db.query("INSERT INTO categorias (nome) VALUES ($1)", [nome]);
+  res.json({ ok: true });
 });
 
 export default router;
