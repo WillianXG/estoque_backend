@@ -1,44 +1,47 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
-import db from "../db.js";
-import { hashSenha, comparaSenha } from "../utils/hash.js";
 
 const router = Router();
 
-router.post("/register", async (req, res) => {
-  const { nome, email, senha } = req.body;
-  if (!nome || !email || !senha)
-    return res.status(400).json({ erro: "Dados obrigatórios" });
+/**
+ * 🔐 Middleware de autenticação
+ */
+export function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
 
-  const senhaHash = await hashSenha(senha);
+  if (!authHeader) {
+    return res.status(401).json({ erro: "Token não enviado" });
+  }
 
-  await db.query(
-    "INSERT INTO usuarios (nome, email, senha) VALUES ($1,$2,$3)",
-    [nome, email, senhaHash]
-  );
+  const [, token] = authHeader.split(" ");
 
-  res.json({ ok: true });
-});
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ erro: "Token inválido" });
+  }
+}
 
+/**
+ * 🟢 LOGIN
+ * POST /auth/login
+ */
 router.post("/login", async (req, res) => {
-  const { email, senha } = req.body;
+  const { usuario, senha } = req.body;
 
-  const result = await db.query(
-    "SELECT * FROM usuarios WHERE email=$1",
-    [email]
-  );
+  if (!usuario || !senha) {
+    return res.status(400).json({ erro: "Usuário e senha obrigatórios" });
+  }
 
-  if (result.rowCount === 0)
-    return res.status(401).json({ erro: "Usuário não encontrado" });
-
-  const user = result.rows[0];
-  const ok = await comparaSenha(senha, user.senha);
-
-  if (!ok)
-    return res.status(401).json({ erro: "Senha inválida" });
+  // ⚠️ MVP SIMPLES (depois liga no banco)
+  if (usuario !== "admin" || senha !== "123") {
+    return res.status(401).json({ erro: "Credenciais inválidas" });
+  }
 
   const token = jwt.sign(
-    { id: user.id, email: user.email },
+    { usuario },
     process.env.JWT_SECRET,
     { expiresIn: "1d" }
   );
@@ -46,6 +49,32 @@ router.post("/login", async (req, res) => {
   res.json({ token });
 });
 
+/**
+ * 🟡 REGISTER (opcional)
+ * POST /auth/register
+ */
+router.post("/register", async (req, res) => {
+  const { usuario, senha } = req.body;
 
+  if (!usuario || !senha) {
+    return res.status(400).json({ erro: "Dados inválidos" });
+  }
+
+  // Aqui no futuro você salva no banco
+  res.status(201).json({
+    mensagem: "Usuário registrado (mock)",
+    usuario
+  });
+});
+
+/**
+ * 🔵 USUÁRIO LOGADO
+ * GET /auth/me
+ */
+router.get("/me", authMiddleware, (req, res) => {
+  res.json({
+    usuario: req.user.usuario
+  });
+});
 
 export default router;
