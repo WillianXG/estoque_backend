@@ -17,5 +17,8 @@ app.use("/categorias", categoriasRoutes);
 app.use("/subcategorias", subcategoriasRoutes);
 app.use("/produtos", produtosRoutes);
 app.use("/vendas", vendasRoutes);
-
+app.get("/health", (req, res) =>
+    {
+        res.json({ ok: true });
+    });
 export default app;

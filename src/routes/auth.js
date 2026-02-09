@@ -46,9 +46,6 @@ router.post("/login", async (req, res) => {
   res.json({ token });
 });
 
-app.get("/health", (req, res) =>
-    {
-        res.json({ ok: true });
-    });
+
 
 export default router;
