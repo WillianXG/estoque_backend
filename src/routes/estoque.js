@@ -1,23 +1,28 @@
 import { Router } from "express";
 import db from "../db.js";
-import auth from "../middlewares/auth.js";
+import { authMiddleware } from "./auth.js";
 
 const router = Router();
 
-router.get("/", auth, async (req, res) => {
-  const result = await db.query("SELECT * FROM produtos");
-  res.json(result.rows);
+router.post("/entrada", authMiddleware, async (req, res) => {
+  const { produto_id, quantidade } = req.body;
+  await db.query(
+    `INSERT INTO estoque (produto_id, quantidade)
+     VALUES ($1, $2)
+     ON CONFLICT (produto_id)
+     DO UPDATE SET quantidade = estoque.quantidade + $2`,
+    [produto_id, quantidade]
+  );
+  res.sendStatus(200);
 });
 
-router.post("/", auth, async (req, res) => {
-  const { nome, preco, categoria_id } = req.body;
-
+router.post("/saida", authMiddleware, async (req, res) => {
+  const { produto_id, quantidade } = req.body;
   await db.query(
-    "INSERT INTO produtos (nome, preco, categoria_id) VALUES ($1,$2,$3)",
-    [nome, preco, categoria_id]
+    "UPDATE estoque SET quantidade = quantidade - $1 WHERE produto_id = $2",
+    [quantidade, produto_id]
   );
-
-  res.json({ ok: true });
+  res.sendStatus(200);
 });
 
 export default router;

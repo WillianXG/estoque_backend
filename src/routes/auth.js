@@ -79,50 +79,6 @@ router.post("/login", async (req, res) => {
 });
 
 
-/**
- * 🟡 REGISTER (opcional)
- * POST /auth/register
- */
-router.post("/register", async (req, res) => {
-    const { nome, telefone } = req.body;
-
-    if (!nome) {
-        return res.status(400).json({ erro: "Nome obrigatório" });
-    }
-
-    if (!telefone) {
-        return res.status(400).json({ erro: "Telefone obrigatório" });
-    }
-
-    let codigo;
-    let existe = true;
-
-    while (existe) {
-        const numero = Math.floor(Math.random() * 10000)
-            .toString()
-            .padStart(4, "0");
-
-        const result = await db.query(
-            "SELECT 1 FROM vendedoras WHERE codigo = $1",
-            [`VEND-${numero}`]
-        );
-
-        existe = result.rows.length > 0;
-
-        if (!existe) {
-            codigo = `VEND-${numero}`;
-        }
-    }
-
-    // Exemplo de uso
-    await db.query(
-        "INSERT INTO vendedoras (nome, telefone, codigo) VALUES ($1, $2, $3)",
-        [nome, telefone, codigo]
-    );
-
-    res.status(201).json({ mensagem: "Registrado com sucesso", codigo });
-});
-
 
 /**
  * 🔵 USUÁRIO LOGADO
