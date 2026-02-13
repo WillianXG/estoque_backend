@@ -31,21 +31,14 @@ router.post("/", authMiddleware, async (req, res) => {
 
     // Itens da venda
     for (const item of itens) {
-      await client.query(
-        `
-        INSERT INTO venda_items
-        (venda_id, produto_id, quantidade, preco)
-        VALUES ($1, $2, $3, $4)
-        `,
-        [vendaId, item.produto_id, item.quantidade, item.preco]
-      );
-      // Verifica estoque atual
+
+      // 1️⃣ Verifica estoque atual
       const estoqueAtual = await client.query(
         `
-  SELECT quantidade_arara
-  FROM estoque
-  WHERE produto_id = $1
-  `,
+    SELECT quantidade_arara
+    FROM estoque
+    WHERE produto_id = $1
+    `,
         [item.produto_id]
       );
 
@@ -56,26 +49,38 @@ router.post("/", authMiddleware, async (req, res) => {
       if (estoqueAtual.rows[0].quantidade_arara < item.quantidade) {
         throw new Error("Estoque insuficiente");
       }
-      // Atualiza estoque
+
+      // 2️⃣ Atualiza estoque
       await client.query(
         `
-        UPDATE estoque
-        SET quantidade_arara = quantidade_arara - $1
-        WHERE produto_id = $2
-        `,
+    UPDATE estoque
+    SET quantidade_arara = quantidade_arara - $1
+    WHERE produto_id = $2
+    `,
         [item.quantidade, item.produto_id]
       );
 
-      // Registra movimentação de saída
+      // 3️⃣ Insere item da venda
       await client.query(
         `
-        INSERT INTO movimentacoes_estoque
-        (produto_id, usuario_id, tipo, local, quantidade, motivo)
-        VALUES ($1, $2, 'saida', 'arara', $3, $4)
-        `,
+    INSERT INTO venda_items
+    (venda_id, produto_id, quantidade, preco)
+    VALUES ($1, $2, $3, $4)
+    `,
+        [vendaId, item.produto_id, item.quantidade, item.preco]
+      );
+
+      // 4️⃣ Registra movimentação
+      await client.query(
+        `
+    INSERT INTO movimentacoes_estoque
+    (produto_id, usuario_id, tipo, local, quantidade, motivo)
+    VALUES ($1, $2, 'saida', 'arara', $3, $4)
+    `,
         [item.produto_id, req.user.id, item.quantidade, `Venda #${vendaId}`]
       );
     }
+
 
     await client.query("COMMIT");
 
