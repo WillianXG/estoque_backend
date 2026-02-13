@@ -39,7 +39,23 @@ router.post("/", authMiddleware, async (req, res) => {
         `,
         [vendaId, item.produto_id, item.quantidade, item.preco]
       );
+      // Verifica estoque atual
+      const estoqueAtual = await client.query(
+        `
+  SELECT quantidade_arara
+  FROM estoque
+  WHERE produto_id = $1
+  `,
+        [item.produto_id]
+      );
 
+      if (estoqueAtual.rows.length === 0) {
+        throw new Error("Produto sem estoque cadastrado");
+      }
+
+      if (estoqueAtual.rows[0].quantidade_arara < item.quantidade) {
+        throw new Error("Estoque insuficiente");
+      }
       // Atualiza estoque
       await client.query(
         `
