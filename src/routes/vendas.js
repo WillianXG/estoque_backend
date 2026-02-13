@@ -5,34 +5,68 @@ import { authMiddleware } from "./auth.js";
 const router = Router();
 
 router.post("/", authMiddleware, async (req, res) => {
-  const { itens } = req.body;
+  const { itens, forma_pagamento, observacoes } = req.body;
+
   const client = await db.connect();
 
   try {
     await client.query("BEGIN");
 
-    const venda = await client.query(
-      "INSERT INTO vendas (vendedora_id, data) VALUES ($1, NOW()) RETURNING id",
-      [req.user.id]
+    const valorTotal = itens.reduce((sum, item) => {
+      return sum + item.preco * item.quantidade;
+    }, 0);
+
+    // Cria venda
+    const vendaRes = await client.query(
+      `
+      INSERT INTO vendas
+      (vendedora_id, data, valor_total, forma_pagamento, observacoes)
+      VALUES ($1, NOW(), $2, $3, $4)
+      RETURNING id
+      `,
+      [req.user.id, valorTotal, forma_pagamento, observacoes]
     );
 
+    const vendaId = vendaRes.rows[0].id;
+
+    // Itens da venda
     for (const item of itens) {
       await client.query(
-        `INSERT INTO venda_itens (venda_id, produto_id, quantidade, preco)
-         VALUES ($1, $2, $3, $4)`,
-        [venda.rows[0].id, item.produto_id, item.quantidade, item.preco]
+        `
+        INSERT INTO venda_items
+        (venda_id, produto_id, quantidade, preco)
+        VALUES ($1, $2, $3, $4)
+        `,
+        [vendaId, item.produto_id, item.quantidade, item.preco]
       );
 
+      // Atualiza estoque
       await client.query(
-        "UPDATE estoque SET quantidade = quantidade - $1 WHERE produto_id = $2",
+        `
+        UPDATE estoque
+        SET quantidade_arara = quantidade_arara - $1
+        WHERE produto_id = $2
+        `,
         [item.quantidade, item.produto_id]
+      );
+
+      // Registra movimentação de saída
+      await client.query(
+        `
+        INSERT INTO movimentacoes_estoque
+        (produto_id, usuario_id, tipo, local, quantidade, motivo)
+        VALUES ($1, $2, 'saida', 'arara', $3, $4)
+        `,
+        [item.produto_id, req.user.id, item.quantidade, `Venda #${vendaId}`]
       );
     }
 
     await client.query("COMMIT");
-    res.status(201).json({ venda_id: venda.rows[0].id });
+
+    res.status(201).json({ venda_id: vendaId });
   } catch (err) {
     await client.query("ROLLBACK");
+    console.error(err);
     res.status(500).json({ erro: "Erro ao finalizar venda" });
   } finally {
     client.release();

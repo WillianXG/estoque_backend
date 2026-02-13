@@ -6,6 +6,7 @@ import categoriasRoutes from "./routes/categorias.js";
 import subcategoriasRoutes from "./routes/subcategorias.js";
 import produtosRoutes from "./routes/produtos.js";
 import vendasRoutes from "./routes/vendas.js";
+import estoqueMovimentacaoRoutes from "./routes/estoqueMovimentacao.js";
 
 const app = express();
 
@@ -17,7 +18,9 @@ app.use("/categorias", categoriasRoutes);
 app.use("/subcategorias", subcategoriasRoutes);
 app.use("/produtos", produtosRoutes);
 app.use("/vendas", vendasRoutes);
-app.get("/health", (req, res) =>
+app.use("/estoque", estoqueMovimentacaoRoutes);
+
+app.get("/", (req, res) =>
     {
         res.json({ ok: true });
     });
