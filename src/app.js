@@ -19,7 +19,8 @@ app.use("/subcategorias", subcategoriasRoutes);
 app.use("/produtos", produtosRoutes);
 app.use("/vendas", vendasRoutes);
 app.use("/estoque", estoqueMovimentacaoRoutes);
-
+app.use("/movimentacoes-estoque", estoqueMovimentacaoRoutes); 
+app.use("/vendedoras", vendasRoutes);
 app.get("/", (req, res) =>
     {
         res.json({ ok: true });
