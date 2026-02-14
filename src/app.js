@@ -7,7 +7,7 @@ import subcategoriasRoutes from "./routes/subcategorias.js";
 import produtosRoutes from "./routes/produtos.js";
 import vendasRoutes from "./routes/vendas.js";
 import estoqueMovimentacaoRoutes from "./routes/estoqueMovimentacao.js";
-
+import vendedorasRoutes from "./routes/vendedoras.js";
 const app = express();
 
 app.use(cors());
@@ -20,7 +20,7 @@ app.use("/produtos", produtosRoutes);
 app.use("/vendas", vendasRoutes);
 app.use("/estoque", estoqueMovimentacaoRoutes);
 app.use("/movimentacoes-estoque", estoqueMovimentacaoRoutes); 
-app.use("/vendedoras", vendasRoutes);
+app.use("/vendedoras", vendedorasRoutes);
 app.get("/", (req, res) =>
     {
         res.json({ ok: true });
