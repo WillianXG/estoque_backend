@@ -21,7 +21,7 @@ app.use("/vendas", vendasRoutes);
 app.use("/estoque", estoqueMovimentacaoRoutes);
 app.use("/movimentacoes-estoque", estoqueMovimentacaoRoutes); 
 app.use("/vendedoras", vendedorasRoutes);
-app.use("/uploads", express.static(path.resolve("uploads")));
+app.use("/uploads", express.static("uploads"));
 app.get("/", (req, res) =>
     {
         res.json({ ok: true });
