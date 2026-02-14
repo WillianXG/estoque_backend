@@ -3,7 +3,7 @@ import db from "../db.js";
 
 const router = express.Router();
 
-// ✅ Listar todas as vendedoras
+// Listar todas as vendedoras
 router.get("/", async (_, res) => {
   try {
     const result = await db.query("SELECT * FROM vendedoras ORDER BY nome");
@@ -14,7 +14,7 @@ router.get("/", async (_, res) => {
   }
 });
 
-// ✅ Criar nova vendedora
+// Criar nova vendedora
 router.post("/", async (req, res) => {
   const { nome, telefone, role = "vendedora" } = req.body;
 
@@ -56,7 +56,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ✅ Atualizar vendedora
+// Atualizar vendedora
 router.put("/:id", async (req, res) => {
   const { id } = req.params;
   const { nome, telefone, role } = req.body;
@@ -87,7 +87,7 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// ✅ Deletar vendedora
+// Deletar vendedora
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
 
