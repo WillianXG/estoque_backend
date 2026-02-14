@@ -127,26 +127,38 @@ router.put("/:id", authMiddleware, async (req, res) => {
 
     // Atualiza estoque se enviado
     if (qtd_arara !== undefined || qtd_deposito !== undefined) {
-      const estoqueAtual = await client.query(
-        `SELECT * FROM estoque WHERE produto_id=$1`,
-        [id]
-      );
+  const { rows: estoqueRows } = await client.query(
+    `SELECT * FROM estoque WHERE produto_id=$1`,
+    [id]
+  );
 
-      if (estoqueAtual.rows.length) {
-        await client.query(
-          `
-          UPDATE estoque
-          SET quantidade_arara=$1, quantidade_deposito=$2
-          WHERE produto_id=$3
-          `,
-          [
-            qtd_arara ?? estoqueAtual.rows[0].quantidade_arara,
-            qtd_deposito ?? estoqueAtual.rows[0].quantidade_deposito,
-            id,
-          ]
-        );
-      }
-    }
+  if (estoqueRows.length === 0) {
+    // Se não existe, cria um registro
+    await client.query(
+      `
+      INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
+      VALUES ($1, $2, $3)
+      `,
+      [id, qtd_arara ?? 0, qtd_deposito ?? 0]
+    );
+  } else {
+    // Se existe, atualiza com valores enviados ou mantém atuais
+    const estoqueAtual = estoqueRows[0];
+    await client.query(
+      `
+      UPDATE estoque
+      SET quantidade_arara=$1, quantidade_deposito=$2
+      WHERE produto_id=$3
+      `,
+      [
+        qtd_arara ?? estoqueAtual.quantidade_arara,
+        qtd_deposito ?? estoqueAtual.quantidade_deposito,
+        id,
+      ]
+    );
+  }
+}
+
 
     await client.query("COMMIT");
     res.json({ msg: "Produto atualizado com sucesso" });
