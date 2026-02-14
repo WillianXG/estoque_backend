@@ -1,6 +1,5 @@
 import { Router } from "express";
 import multer from "multer";
-import path from "path";
 import db from "../db.js";
 import { authMiddleware } from "./auth.js";
 
@@ -22,7 +21,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
 });
 
 /* =========================
@@ -34,24 +33,50 @@ router.post(
   authMiddleware,
   upload.single("imagem"),
   async (req, res) => {
-    const {
-      nome,
-      preco_venda,
-      preco_compra,
-      subcategoria_id,
-      variacao,
-      qtd_arara = 0,
-      qtd_deposito = 0,
-    } = req.body;
-
-    const imagem_url = req.file
-      ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`
-      : null;
-
     const client = await db.connect();
 
     try {
       await client.query("BEGIN");
+
+      const {
+        nome,
+        preco_venda,
+        preco_compra,
+        subcategoria_id,
+        variacao,
+      } = req.body;
+
+      // 🔒 VALIDAÇÃO OBRIGATÓRIA
+      if (!nome || !preco_venda || !subcategoria_id) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ erro: "Campos obrigatórios não enviados" });
+      }
+
+      const precoVendaNum = Number(preco_venda);
+      const precoCompraNum = preco_compra ? Number(preco_compra) : null;
+
+      if (isNaN(precoVendaNum)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ erro: "Preço de venda inválido" });
+      }
+
+      if (precoCompraNum !== null && isNaN(precoCompraNum)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ erro: "Preço de compra inválido" });
+      }
+
+      const subcategoriaIdNum = Number(subcategoria_id);
+      if (isNaN(subcategoriaIdNum)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ erro: "Subcategoria inválida" });
+      }
+
+      const qtd_arara = Number(req.body.qtd_arara || 0);
+      const qtd_deposito = Number(req.body.qtd_deposito || 0);
+
+      const imagem_url = req.file
+        ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`
+        : null;
 
       const produtoResult = await client.query(
         `
@@ -62,10 +87,10 @@ router.post(
         `,
         [
           nome,
-          preco_venda,
-          preco_compra,
-          subcategoria_id,
-          variacao,
+          precoVendaNum,
+          precoCompraNum,
+          subcategoriaIdNum,
+          variacao || "",
           imagem_url,
           req.user.id,
         ]
@@ -73,7 +98,6 @@ router.post(
 
       const produtoId = produtoResult.rows[0].id;
 
-      // Inserir estoque
       await client.query(
         `
         INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
@@ -82,7 +106,6 @@ router.post(
         [produtoId, qtd_arara, qtd_deposito]
       );
 
-      // Movimentações
       if (qtd_arara > 0) {
         await client.query(
           `
@@ -106,11 +129,12 @@ router.post(
       }
 
       await client.query("COMMIT");
+
       res.status(201).json({ id: produtoId });
 
     } catch (err) {
       await client.query("ROLLBACK");
-      console.error(err);
+      console.error("ERRO REAL:", err);
       res.status(500).json({ erro: "Erro ao criar produto" });
     } finally {
       client.release();
@@ -124,14 +148,12 @@ router.post(
 
 router.get("/", authMiddleware, async (req, res) => {
   try {
-    const result = await db.query(
-      `
+    const result = await db.query(`
       SELECT p.*, e.quantidade_arara, e.quantidade_deposito
       FROM produtos p
       LEFT JOIN estoque e ON e.produto_id = p.id
       ORDER BY p.nome
-      `
-    );
+    `);
 
     res.json(result.rows);
   } catch (err) {
@@ -150,21 +172,32 @@ router.put(
   upload.single("imagem"),
   async (req, res) => {
     const { id } = req.params;
-
-    const {
-      nome,
-      preco_venda,
-      preco_compra,
-      subcategoria_id,
-      variacao,
-      qtd_arara,
-      qtd_deposito,
-    } = req.body;
-
     const client = await db.connect();
 
     try {
       await client.query("BEGIN");
+
+      const {
+        nome,
+        preco_venda,
+        preco_compra,
+        subcategoria_id,
+        variacao,
+      } = req.body;
+
+      if (!nome || !preco_venda || !subcategoria_id) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ erro: "Campos obrigatórios não enviados" });
+      }
+
+      const precoVendaNum = Number(preco_venda);
+      const precoCompraNum = preco_compra ? Number(preco_compra) : null;
+      const subcategoriaIdNum = Number(subcategoria_id);
+
+      if (isNaN(precoVendaNum) || isNaN(subcategoriaIdNum)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ erro: "Dados inválidos" });
+      }
 
       let imagem_url = null;
 
@@ -172,7 +205,6 @@ router.put(
         imagem_url = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
       }
 
-      // Atualiza produto
       await client.query(
         `
         UPDATE produtos
@@ -187,16 +219,25 @@ router.put(
         `,
         [
           nome,
-          preco_venda,
-          preco_compra,
-          subcategoria_id,
-          variacao,
+          precoVendaNum,
+          precoCompraNum,
+          subcategoriaIdNum,
+          variacao || "",
           imagem_url,
           id,
         ]
       );
 
-      // Atualiza estoque se enviado
+      const qtd_arara =
+        req.body.qtd_arara !== undefined
+          ? Number(req.body.qtd_arara)
+          : undefined;
+
+      const qtd_deposito =
+        req.body.qtd_deposito !== undefined
+          ? Number(req.body.qtd_deposito)
+          : undefined;
+
       if (qtd_arara !== undefined || qtd_deposito !== undefined) {
         const { rows } = await client.query(
           `SELECT * FROM estoque WHERE produto_id=$1`,
@@ -230,43 +271,17 @@ router.put(
       }
 
       await client.query("COMMIT");
+
       res.json({ msg: "Produto atualizado com sucesso" });
 
     } catch (err) {
       await client.query("ROLLBACK");
-      console.error(err);
+      console.error("ERRO REAL:", err);
       res.status(500).json({ erro: "Erro ao atualizar produto" });
     } finally {
       client.release();
     }
   }
 );
-
-/* =========================
-   REMOVER PRODUTO
-========================= */
-
-router.delete("/:id", authMiddleware, async (req, res) => {
-  const { id } = req.params;
-  const client = await db.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    await client.query(`DELETE FROM movimentacoes_estoque WHERE produto_id=$1`, [id]);
-    await client.query(`DELETE FROM estoque WHERE produto_id=$1`, [id]);
-    await client.query(`DELETE FROM produtos WHERE id=$1`, [id]);
-
-    await client.query("COMMIT");
-    res.json({ msg: "Produto removido com sucesso" });
-
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error(err);
-    res.status(500).json({ erro: "Erro ao remover produto" });
-  } finally {
-    client.release();
-  }
-});
 
 export default router;
