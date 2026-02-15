@@ -82,7 +82,7 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
  * GET /movimentacoes-estoque
  * Retorna todas as movimentações de estoque com quantidade antes e depois
  */
-router.get("/movimentacoes-estoque", authMiddleware, async (req, res) => {
+router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(`
       SELECT 
