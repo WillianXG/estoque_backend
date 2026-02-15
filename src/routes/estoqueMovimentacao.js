@@ -81,7 +81,7 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 /**
  * GET /movimentacoes-estoque
  * Retorna todas as movimentações de estoque
- * Inclui o nome do produto, nome da vendedora e quantidade anterior/nova
+ * Inclui o nome do produto, nome da vendedora e quantidade anterior/nova baseado no estoque real
  */
 router.get("/", authMiddleware, async (req, res) => {
   try {
@@ -97,33 +97,34 @@ router.get("/", authMiddleware, async (req, res) => {
          m.quantidade,
          m.motivo,
          m.data,
-         -- quantidade anterior usando LAG
-         COALESCE(LAG(
-           CASE
-             WHEN m.tipo = 'entrada' OR m.tipo = 'ajuste' THEN m.quantidade * -1
-             WHEN m.tipo = 'saida' THEN m.quantidade
-           END
-         ) OVER (
-           PARTITION BY m.produto_id, m.local
-           ORDER BY m.data, m.id
-         ), 0) + 
-         -- para somar a movimentação atual
-         (CASE 
-            WHEN m.tipo = 'entrada' OR m.tipo = 'ajuste' THEN m.quantidade
-            WHEN m.tipo = 'saida' THEN -m.quantidade
-          END) AS quantidade_nova
+         e.quantidade_arara,
+         e.quantidade_deposito
       FROM movimentacoes_estoque m
       LEFT JOIN produtos p ON p.id = m.produto_id
       LEFT JOIN vendedoras v ON v.id = m.usuario_id
+      LEFT JOIN estoque e ON e.produto_id = m.produto_id
       ORDER BY m.data DESC, m.id DESC`
     );
 
-    // Para frontend, podemos calcular quantidade_anterior = quantidade_nova - quantidade atual
-    const movimentacoes = result.rows.map((m) => ({
-      ...m,
-      quantidade_nova: Number(m.quantidade_nova),
-      quantidade_anterior: Number(m.quantidade_nova) - Number(m.quantidade),
-    }));
+    // Ajusta quantidade_anterior e quantidade_nova usando o estoque atual
+    const movimentacoes = result.rows.map((m) => {
+      let quantidade_anterior = 0;
+      let quantidade_nova = 0;
+
+      if (m.local === "arara") {
+        quantidade_nova = Number(m.local === "arara" ? m.quantidade_arara : 0);
+        quantidade_anterior = quantidade_nova - Number(m.quantidade);
+      } else if (m.local === "deposito") {
+        quantidade_nova = Number(m.local === "deposito" ? m.quantidade_deposito : 0);
+        quantidade_anterior = quantidade_nova - Number(m.quantidade);
+      }
+
+      return {
+        ...m,
+        quantidade_nova,
+        quantidade_anterior,
+      };
+    });
 
     res.status(200).json(movimentacoes);
   } catch (err) {
