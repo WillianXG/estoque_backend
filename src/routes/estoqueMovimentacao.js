@@ -4,15 +4,24 @@ import { authMiddleware } from "./auth.js";
 
 const router = Router();
 
-// POST /movimentacoes-estoque/ajustar
 router.post("/ajustar", authMiddleware, async (req, res) => {
   const { produto_id, tipo, local, quantidade, motivo } = req.body;
 
-  if (!produto_id || !tipo || !local || quantidade == null)
+  // Validação básica
+  if (!produto_id || !tipo || !local || quantidade == null) {
     return res.status(400).json({ erro: "Dados incompletos" });
+  }
 
   const quantidadeNum = Number(quantidade);
-  if (isNaN(quantidadeNum)) return res.status(400).json({ erro: "Quantidade inválida" });
+  if (isNaN(quantidadeNum)) {
+    return res.status(400).json({ erro: "Quantidade inválida" });
+  }
+
+  // Confere se req.user existe
+  const usuarioId = req.user?.id;
+  if (!usuarioId) {
+    return res.status(401).json({ erro: "Usuário não autenticado" });
+  }
 
   const client = await db.connect();
 
@@ -36,20 +45,23 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
         `UPDATE estoque SET quantidade_${local} = quantidade_${local} - $1 WHERE produto_id = $2`,
         [quantidadeNum, produto_id]
       );
+    } else {
+      throw new Error(`Tipo inválido: ${tipo}`);
     }
 
     // Registra movimentação
     await client.query(
-      `INSERT INTO movimentacao_estoque (produto_id, usuario_id, tipo, local, quantidade, motivo)
+      `INSERT INTO movimentacao_estoque
+        (produto_id, usuario_id, tipo, local, quantidade, motivo)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [produto_id, req.user.id, tipo, local, quantidadeNum, motivo || ""]
+      [produto_id, usuarioId, tipo, local, quantidadeNum, motivo || ""]
     );
 
     await client.query("COMMIT");
     res.status(200).json({ message: "Movimentação registrada" });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error(err);
+    console.error("ERRO AJUSTAR ESTOQUE:", err);
     res.status(500).json({ erro: "Erro ao ajustar estoque" });
   } finally {
     client.release();
