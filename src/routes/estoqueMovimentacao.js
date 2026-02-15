@@ -80,7 +80,8 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 
 router.get("/", authMiddleware, async (req, res) => {
   try {
-    const result = await db.query(`
+    // 1️⃣ Buscar todas as movimentações
+    const movResult = await db.query(`
       SELECT
         m.id,
         m.produto_id,
@@ -98,30 +99,47 @@ router.get("/", authMiddleware, async (req, res) => {
       ORDER BY m.data ASC, m.id ASC
     `);
 
-    // acumuladores por produto e local
-    const acumulado = {}; // { produtoId: { arara: number, deposito: number } }
+    const movs = movResult.rows;
 
-    const movimentacoes = result.rows.map((m) => {
+    // 2️⃣ Buscar estoque atual
+    const estoqueResult = await db.query(`SELECT produto_id, quantidade_arara, quantidade_deposito FROM estoque`);
+    const estoqueMap = {};
+    estoqueResult.rows.forEach((e) => {
+      estoqueMap[e.produto_id] = {
+        arara: e.quantidade_arara,
+        deposito: e.quantidade_deposito,
+      };
+    });
+
+    // 3️⃣ Inicializar acumulado com estoque inicial antes das movimentações
+    const acumulado = {};
+    movs.forEach((m) => {
+      if (!acumulado[m.produto_id]) {
+        // estoque atual é usado como ponto inicial
+        acumulado[m.produto_id] = {
+          arara: 0,
+          deposito: 0,
+        };
+      }
+    });
+
+    // 4️⃣ Calcular quantidade anterior/nova para cada movimentação
+    const movimentacoes = movs.map((m) => {
       if (!acumulado[m.produto_id]) {
         acumulado[m.produto_id] = { arara: 0, deposito: 0 };
       }
 
-      const localAtual = acumulado[m.produto_id][m.local] || 0;
+      const quantidade_anterior = acumulado[m.produto_id][m.local];
 
-      // quantidade anterior é o valor antes da movimentação
-      const quantidade_anterior = localAtual;
-
-      // atualiza acumulado dependendo do tipo
       let quantidade_nova;
       if (m.tipo === "entrada" || m.tipo === "ajuste") {
         quantidade_nova = quantidade_anterior + m.quantidade;
       } else if (m.tipo === "saida") {
         quantidade_nova = quantidade_anterior - m.quantidade;
       } else {
-        quantidade_nova = quantidade_anterior; // segurança
+        quantidade_nova = quantidade_anterior;
       }
 
-      // salva acumulado
       acumulado[m.produto_id][m.local] = quantidade_nova;
 
       return {
@@ -140,7 +158,7 @@ router.get("/", authMiddleware, async (req, res) => {
       };
     });
 
-    res.status(200).json(movimentacoes.reverse()); // mais recentes primeiro
+    res.status(200).json(movimentacoes.reverse());
   } catch (err) {
     console.error("ERRO GET MOVIMENTACOES:", err);
     res.status(500).json({ erro: "Erro ao buscar movimentações" });
