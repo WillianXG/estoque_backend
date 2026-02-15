@@ -13,7 +13,6 @@ const router = Router();
 router.post("/ajustar", authMiddleware, async (req, res) => {
   const { produto_id, tipo, local, quantidade, motivo } = req.body;
 
-  // Validação básica
   if (!produto_id || !tipo || !local || quantidade == null) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
@@ -78,28 +77,29 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
   }
 });
 
-
 /**
  * GET /movimentacoes-estoque
  * Retorna todas as movimentações de estoque
+ * Inclui o nome do produto direto
  */
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(
       `SELECT 
-         id,
-         produto_id,
-         usuario_id,
-         tipo,
-         local,
-         quantidade,
-         motivo,
-         data
-       FROM movimentacoes_estoque
-       ORDER BY data DESC, id DESC`
+         m.id,
+         m.produto_id,
+         p.nome AS produto_nome,
+         m.usuario_id,
+         m.tipo,
+         m.local,
+         m.quantidade,
+         m.motivo,
+         m.data
+       FROM movimentacoes_estoque m
+       LEFT JOIN produtos p ON p.id = m.produto_id
+       ORDER BY m.data DESC, m.id DESC`
     );
 
-    // Retornar como JSON
     res.status(200).json(result.rows);
   } catch (err) {
     console.error("ERRO GET MOVIMENTACOES:", err);
