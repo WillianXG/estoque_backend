@@ -12,25 +12,28 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
 
+  if (!["arara", "deposito"].includes(local)) {
+    return res.status(400).json({ erro: `Local inválido: ${local}` });
+  }
+
   const quantidadeNum = Number(quantidade);
   if (isNaN(quantidadeNum)) {
     return res.status(400).json({ erro: "Quantidade inválida" });
   }
 
-  // Confere se req.user existe
   const usuarioId = req.user?.id;
   if (!usuarioId) {
     return res.status(401).json({ erro: "Usuário não autenticado" });
   }
 
   const client = await db.connect();
-
   try {
     await client.query("BEGIN");
 
     // Garantir que o estoque exista
     await client.query(
-      `INSERT INTO estoque (produto_id, quantidade_${local}) VALUES ($1, 0) ON CONFLICT (produto_id) DO NOTHING`,
+      `INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
+       VALUES ($1, 0, 0) ON CONFLICT (produto_id) DO NOTHING`,
       [produto_id]
     );
 
