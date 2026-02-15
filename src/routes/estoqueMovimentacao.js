@@ -5,20 +5,20 @@ import { authMiddleware } from "./auth.js";
 const router = Router();
 
 /**
- * Ajustar estoque com histórico
+ * Ajustar estoque e registrar movimentação
  * Body:
  * {
- *   produto_id,
- *   tipo,             // 'entrada' ou 'saida' ou 'ajuste'
- *   local,            // 'arara' ou 'deposito'
- *   quantidade,
- *   motivo
+ *   produto_id: number,
+ *   tipo: 'entrada' | 'saida' | 'ajuste',
+ *   local: 'arara' | 'deposito',
+ *   quantidade: number,
+ *   motivo?: string
  * }
  */
 router.post("/ajustar", authMiddleware, async (req, res) => {
   const { produto_id, tipo, local, quantidade, motivo } = req.body;
 
-  if (!produto_id || !tipo || !local) {
+  if (!produto_id || !tipo || !local || quantidade == null) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
 
@@ -27,35 +27,29 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // Atualiza estoque somando ou subtraindo
-    if (tipo === "entrada") {
+    // Atualiza estoque
+    if (tipo === "entrada" || tipo === "ajuste") {
       await client.query(
-        `
-        UPDATE estoque
-        SET quantidade_${local} = quantidade_${local} + $1
-        WHERE produto_id = $2
-        `,
+        `UPDATE estoque
+         SET quantidade_${local} = quantidade_${local} + $1
+         WHERE produto_id = $2`,
         [quantidade, produto_id]
       );
-    } else {
+    } else if (tipo === "saida") {
       await client.query(
-        `
-        UPDATE estoque
-        SET quantidade_${local} = quantidade_${local} - $1
-        WHERE produto_id = $2
-        `,
+        `UPDATE estoque
+         SET quantidade_${local} = quantidade_${local} - $1
+         WHERE produto_id = $2`,
         [quantidade, produto_id]
       );
     }
 
-    // Registra no histórico
+    // Registra movimentação
     await client.query(
-      `
-      INSERT INTO movimentacoes_estoque
-      (produto_id, usuario_id, tipo, local, quantidade, motivo)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      `,
-      [produto_id, req.user.id, tipo, local, quantidade, motivo]
+      `INSERT INTO movimentacao_estoque
+        (produto_id, usuario_id, tipo, local, quantidade, motivo)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [produto_id, req.user.id, tipo, local, quantidade, motivo || ""]
     );
 
     await client.query("COMMIT");
