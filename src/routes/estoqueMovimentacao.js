@@ -4,18 +4,15 @@ import { authMiddleware } from "./auth.js";
 
 const router = Router();
 
-/**
- * Ajustar estoque e registrar movimentação
- * Body: { produto_id, tipo, local, quantidade, motivo? }
- * tipo: 'entrada' | 'saida' | 'ajuste'
- * local: 'arara' | 'deposito'
- */
+// POST /movimentacoes-estoque/ajustar
 router.post("/ajustar", authMiddleware, async (req, res) => {
   const { produto_id, tipo, local, quantidade, motivo } = req.body;
 
-  if (!produto_id || !tipo || !local || quantidade == null) {
+  if (!produto_id || !tipo || !local || quantidade == null)
     return res.status(400).json({ erro: "Dados incompletos" });
-  }
+
+  const quantidadeNum = Number(quantidade);
+  if (isNaN(quantidadeNum)) return res.status(400).json({ erro: "Quantidade inválida" });
 
   const client = await db.connect();
 
@@ -24,37 +21,28 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 
     // Garantir que o estoque exista
     await client.query(
-      `
-      INSERT INTO estoque (produto_id, quantidade_${local})
-      VALUES ($1, 0)
-      ON CONFLICT (produto_id) DO NOTHING
-      `,
+      `INSERT INTO estoque (produto_id, quantidade_${local}) VALUES ($1, 0) ON CONFLICT (produto_id) DO NOTHING`,
       [produto_id]
     );
 
     // Atualiza estoque
     if (tipo === "entrada" || tipo === "ajuste") {
       await client.query(
-        `UPDATE estoque
-         SET quantidade_${local} = quantidade_${local} + $1
-         WHERE produto_id = $2`,
-        [quantidade, produto_id]
+        `UPDATE estoque SET quantidade_${local} = quantidade_${local} + $1 WHERE produto_id = $2`,
+        [quantidadeNum, produto_id]
       );
     } else if (tipo === "saida") {
       await client.query(
-        `UPDATE estoque
-         SET quantidade_${local} = quantidade_${local} - $1
-         WHERE produto_id = $2`,
-        [quantidade, produto_id]
+        `UPDATE estoque SET quantidade_${local} = quantidade_${local} - $1 WHERE produto_id = $2`,
+        [quantidadeNum, produto_id]
       );
     }
 
     // Registra movimentação
     await client.query(
-      `INSERT INTO movimentacao_estoque
-        (produto_id, usuario_id, tipo, local, quantidade, motivo)
+      `INSERT INTO movimentacao_estoque (produto_id, usuario_id, tipo, local, quantidade, motivo)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [produto_id, req.user.id, tipo, local, quantidade, motivo || ""]
+      [produto_id, req.user.id, tipo, local, quantidadeNum, motivo || ""]
     );
 
     await client.query("COMMIT");
