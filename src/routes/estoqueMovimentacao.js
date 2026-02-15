@@ -4,6 +4,12 @@ import { authMiddleware } from "./auth.js";
 
 const router = Router();
 
+/**
+ * POST /movimentacoes-estoque/ajustar
+ * Body: { produto_id, tipo, local, quantidade, motivo? }
+ * tipo: 'entrada' | 'saida' | 'ajuste'
+ * local: 'arara' | 'deposito'
+ */
 router.post("/ajustar", authMiddleware, async (req, res) => {
   const { produto_id, tipo, local, quantidade, motivo } = req.body;
 
@@ -33,7 +39,8 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
     // Garantir que o estoque exista
     await client.query(
       `INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
-       VALUES ($1, 0, 0) ON CONFLICT (produto_id) DO NOTHING`,
+       VALUES ($1, 0, 0)
+       ON CONFLICT (produto_id) DO NOTHING`,
       [produto_id]
     );
 
@@ -54,7 +61,7 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 
     // Registra movimentação
     await client.query(
-      `INSERT INTO movimentacao_estoque
+      `INSERT INTO movimentacoes_estoque
         (produto_id, usuario_id, tipo, local, quantidade, motivo)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [produto_id, usuarioId, tipo, local, quantidadeNum, motivo || ""]
