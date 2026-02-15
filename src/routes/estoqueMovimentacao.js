@@ -81,12 +81,13 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 /**
  * GET /movimentacoes-estoque
  * Retorna todas as movimentações de estoque
- * Inclui o nome do produto, nome da vendedora e quantidade anterior/nova baseado no estoque real
+ * Inclui nome do produto, nome da vendedora e quantidade anterior/nova
  */
 router.get("/", authMiddleware, async (req, res) => {
   try {
+    // Busca todas as movimentações
     const result = await db.query(
-      `SELECT
+      `SELECT 
          m.id,
          m.produto_id,
          p.nome AS produto_nome,
@@ -96,42 +97,58 @@ router.get("/", authMiddleware, async (req, res) => {
          m.local,
          m.quantidade,
          m.motivo,
-         m.data,
-         e.quantidade_arara,
-         e.quantidade_deposito
-      FROM movimentacoes_estoque m
-      LEFT JOIN produtos p ON p.id = m.produto_id
-      LEFT JOIN vendedoras v ON v.id = m.usuario_id
-      LEFT JOIN estoque e ON e.produto_id = m.produto_id
-      ORDER BY m.data DESC, m.id DESC`
+         m.data
+       FROM movimentacoes_estoque m
+       LEFT JOIN produtos p ON p.id = m.produto_id
+       LEFT JOIN vendedoras v ON v.id = m.usuario_id
+       ORDER BY m.data ASC, m.id ASC`
     );
 
-    // Ajusta quantidade_anterior e quantidade_nova usando o estoque atual
-    const movimentacoes = result.rows.map((m) => {
-      let quantidade_anterior = 0;
-      let quantidade_nova = 0;
+    const movimentacoes = result.rows;
 
-      if (m.local === "arara") {
-        quantidade_nova = Number(m.local === "arara" ? m.quantidade_arara : 0);
-        quantidade_anterior = quantidade_nova - Number(m.quantidade);
-      } else if (m.local === "deposito") {
-        quantidade_nova = Number(m.local === "deposito" ? m.quantidade_deposito : 0);
-        quantidade_anterior = quantidade_nova - Number(m.quantidade);
+    // Busca o estoque atual como base
+    const estoqueResult = await db.query(`SELECT * FROM estoque`);
+    const estoqueBase = {};
+    estoqueResult.rows.forEach((e) => {
+      estoqueBase[`${e.produto_id}_arara`] = Number(e.quantidade_arara);
+      estoqueBase[`${e.produto_id}_deposito`] = Number(e.quantidade_deposito);
+    });
+
+    // Calcula quantidade_anterior e quantidade_nova para cada movimentação
+    const exibicao = movimentacoes.map((m) => {
+      const key = `${m.produto_id}_${m.local}`;
+      const quantidadeAtual = estoqueBase[key] ?? 0;
+      let quantidadeAnterior, quantidadeNova;
+
+      if (m.tipo === "entrada" || m.tipo === "ajuste") {
+        quantidadeAnterior = quantidadeAtual - m.quantidade;
+        quantidadeNova = quantidadeAtual;
+      } else if (m.tipo === "saida") {
+        quantidadeAnterior = quantidadeAtual + m.quantidade;
+        quantidadeNova = quantidadeAtual;
+      } else {
+        quantidadeAnterior = quantidadeAtual;
+        quantidadeNova = quantidadeAtual;
       }
+
+      // Atualiza base para próxima movimentação do mesmo produto/local
+      estoqueBase[key] = quantidadeNova;
 
       return {
         ...m,
-        quantidade_nova,
-        quantidade_anterior,
+        quantidade_anterior: quantidadeAnterior,
+        quantidade_nova: quantidadeNova,
       };
     });
 
-    res.status(200).json(movimentacoes);
+    // Mais recentes no topo
+    exibicao.reverse();
+
+    res.status(200).json(exibicao);
   } catch (err) {
     console.error("ERRO GET MOVIMENTACOES:", err);
     res.status(500).json({ erro: "Erro ao buscar movimentações" });
   }
 });
-
 
 export default router;
