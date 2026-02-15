@@ -81,64 +81,54 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 /**
  * GET /movimentacoes-estoque
  * Retorna todas as movimentações de estoque
- * Agora considera valores absolutos para quantidade anterior/nova
+ * Inclui o nome do produto, nome da vendedora e quantidade anterior/nova
  */
 router.get("/", authMiddleware, async (req, res) => {
   try {
-    const result = await db.query(
-      `SELECT
-         m.id,
-         m.produto_id,
-         p.nome AS produto_nome,
-         m.usuario_id,
-         v.nome AS usuario_nome,
-         m.tipo,
-         m.local,
-         m.quantidade,
-         m.motivo,
-         m.data
-       FROM movimentacoes_estoque m
-       LEFT JOIN produtos p ON p.id = m.produto_id
-       LEFT JOIN vendedoras v ON v.id = m.usuario_id
-       ORDER BY m.data ASC, m.id ASC`
-    );
+    const result = await db.query(`
+      SELECT
+        m.id,
+        m.produto_id,
+        p.nome AS produto_nome,
+        m.usuario_id,
+        v.nome AS usuario_nome,
+        m.tipo,
+        m.local,
+        m.quantidade AS quantidade_mov,
+        m.motivo,
+        m.data,
+        -- Quantidade atual real da tabela estoque
+        e.quantidade_arara,
+        e.quantidade_deposito
+      FROM movimentacoes_estoque m
+      LEFT JOIN produtos p ON p.id = m.produto_id
+      LEFT JOIN vendedoras v ON v.id = m.usuario_id
+      LEFT JOIN estoque e ON e.produto_id = m.produto_id
+      ORDER BY m.data ASC, m.id ASC
+    `);
 
-    const movimentacoes = result.rows;
+    const movimentacoes = result.rows.map((m) => {
+      // Determina quantidade anterior e nova baseado no local
+      let quantidade_anterior = 0;
+      let quantidade_nova = 0;
 
-    // Map para controlar estoque atual por produto/local
-    const estoqueAtual = {}; // key = `${produto_id}_${local}`
-
-    const exibicao = movimentacoes.map((m) => {
-      const key = `${m.produto_id}_${m.local}`;
-      const anterior = estoqueAtual[key] ?? 0;
-
-      // Agora quantidade_nova é o valor absoluto que está na movimentação
-      let nova;
-      if (m.tipo === "entrada" || m.tipo === "ajuste") {
-        // Entrada ou ajuste = quantidade representa o valor final desejado
-        nova = m.quantidade;
-      } else if (m.tipo === "saida") {
-        nova = m.quantidade;
-      } else {
-        nova = anterior + m.quantidade;
+      if (m.local === "arara") {
+        quantidade_nova = m.quantidade_arara;
+        quantidade_anterior = m.quantidade_arara - m.quantidade_mov;
+      } else if (m.local === "deposito") {
+        quantidade_nova = m.quantidade_deposito;
+        quantidade_anterior = m.quantidade_deposito - m.quantidade_mov;
       }
-
-      // Para exibir corretamente "Antes → Depois" baseado em alteração absoluta:
-      const quantidade_anterior = anterior;
-      const quantidade_nova = nova;
-
-      // Atualiza o estoqueAtual para próximas movimentações
-      estoqueAtual[key] = nova;
 
       return {
         id: m.id,
         produto_id: m.produto_id,
-        produto_nome: m.produto_nome ?? "Produto Desconhecido",
+        produto_nome: m.produto_nome,
         usuario_id: m.usuario_id,
-        usuario_nome: m.usuario_nome ?? null,
+        usuario_nome: m.usuario_nome,
         tipo: m.tipo,
         local: m.local,
-        quantidade: m.quantidade,
+        quantidade: m.quantidade_mov,
         quantidade_anterior,
         quantidade_nova,
         motivo: m.motivo,
@@ -146,8 +136,7 @@ router.get("/", authMiddleware, async (req, res) => {
       };
     });
 
-    // Mais recentes no topo
-    res.status(200).json(exibicao.reverse());
+    res.status(200).json(movimentacoes.reverse()); // mais recentes primeiro
   } catch (err) {
     console.error("ERRO GET MOVIMENTACOES:", err);
     res.status(500).json({ erro: "Erro ao buscar movimentações" });
