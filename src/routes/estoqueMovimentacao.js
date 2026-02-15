@@ -78,11 +78,14 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
   }
 });
 
-router.get("/", authMiddleware, async (req, res) => {
+/**
+ * GET /movimentacoes-estoque
+ * Retorna todas as movimentações de estoque com quantidade antes e depois
+ */
+router.get("/movimentacoes-estoque", authMiddleware, async (req, res) => {
   try {
-    // 1️⃣ Buscar todas as movimentações
-    const movResult = await db.query(`
-      SELECT
+    const result = await db.query(`
+      SELECT 
         m.id,
         m.produto_id,
         p.nome AS produto_nome,
@@ -90,75 +93,34 @@ router.get("/", authMiddleware, async (req, res) => {
         v.nome AS usuario_nome,
         m.tipo,
         m.local,
-        m.quantidade AS quantidade_mov,
+        m.quantidade AS quantidade_modificada,
         m.motivo,
-        m.data
+        m.data,
+        -- pega a quantidade antes da movimentação diretamente do estoque
+        CASE 
+          WHEN m.local = 'arara' THEN e.quantidade_arara - m.quantidade
+          WHEN m.local = 'deposito' THEN e.quantidade_deposito - m.quantidade
+        END AS quantidade_anterior,
+        -- quantidade depois da movimentação
+        CASE 
+          WHEN m.local = 'arara' THEN e.quantidade_arara
+          WHEN m.local = 'deposito' THEN e.quantidade_deposito
+        END AS quantidade_nova
       FROM movimentacoes_estoque m
-      LEFT JOIN produtos p ON p.id = m.produto_id
+      JOIN estoque e ON e.produto_id = m.produto_id
+      JOIN produtos p ON p.id = m.produto_id
       LEFT JOIN vendedoras v ON v.id = m.usuario_id
       ORDER BY m.data ASC, m.id ASC
     `);
 
-    const movs = movResult.rows;
+    const movimentacoes = result.rows.map((m) => ({
+      ...m,
+      quantidade_anterior: Number(m.quantidade_anterior),
+      quantidade_nova: Number(m.quantidade_nova),
+      quantidade_modificada: Number(m.quantidade_modificada),
+    }));
 
-    // 2️⃣ Buscar estoque atual
-    const estoqueResult = await db.query(`SELECT produto_id, quantidade_arara, quantidade_deposito FROM estoque`);
-    const estoqueMap = {};
-    estoqueResult.rows.forEach((e) => {
-      estoqueMap[e.produto_id] = {
-        arara: e.quantidade_arara,
-        deposito: e.quantidade_deposito,
-      };
-    });
-
-    // 3️⃣ Inicializar acumulado com estoque inicial antes das movimentações
-    const acumulado = {};
-    movs.forEach((m) => {
-      if (!acumulado[m.produto_id]) {
-        // estoque atual é usado como ponto inicial
-        acumulado[m.produto_id] = {
-          arara: 0,
-          deposito: 0,
-        };
-      }
-    });
-
-    // 4️⃣ Calcular quantidade anterior/nova para cada movimentação
-    const movimentacoes = movs.map((m) => {
-      if (!acumulado[m.produto_id]) {
-        acumulado[m.produto_id] = { arara: 0, deposito: 0 };
-      }
-
-      const quantidade_anterior = acumulado[m.produto_id][m.local];
-
-      let quantidade_nova;
-      if (m.tipo === "entrada" || m.tipo === "ajuste") {
-        quantidade_nova = quantidade_anterior + m.quantidade;
-      } else if (m.tipo === "saida") {
-        quantidade_nova = quantidade_anterior - m.quantidade;
-      } else {
-        quantidade_nova = quantidade_anterior;
-      }
-
-      acumulado[m.produto_id][m.local] = quantidade_nova;
-
-      return {
-        id: m.id,
-        produto_id: m.produto_id,
-        produto_nome: m.produto_nome,
-        usuario_id: m.usuario_id,
-        usuario_nome: m.usuario_nome,
-        tipo: m.tipo,
-        local: m.local,
-        quantidade: m.quantidade_mov,
-        quantidade_anterior,
-        quantidade_nova,
-        motivo: m.motivo,
-        data: m.data,
-      };
-    });
-
-    res.status(200).json(movimentacoes.reverse());
+    res.status(200).json(movimentacoes);
   } catch (err) {
     console.error("ERRO GET MOVIMENTACOES:", err);
     res.status(500).json({ erro: "Erro ao buscar movimentações" });
