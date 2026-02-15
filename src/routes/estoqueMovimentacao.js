@@ -6,14 +6,9 @@ const router = Router();
 
 /**
  * Ajustar estoque e registrar movimentação
- * Body:
- * {
- *   produto_id: number,
- *   tipo: 'entrada' | 'saida' | 'ajuste',
- *   local: 'arara' | 'deposito',
- *   quantidade: number,
- *   motivo?: string
- * }
+ * Body: { produto_id, tipo, local, quantidade, motivo? }
+ * tipo: 'entrada' | 'saida' | 'ajuste'
+ * local: 'arara' | 'deposito'
  */
 router.post("/ajustar", authMiddleware, async (req, res) => {
   const { produto_id, tipo, local, quantidade, motivo } = req.body;
@@ -26,6 +21,16 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 
   try {
     await client.query("BEGIN");
+
+    // Garantir que o estoque exista
+    await client.query(
+      `
+      INSERT INTO estoque (produto_id, quantidade_${local})
+      VALUES ($1, 0)
+      ON CONFLICT (produto_id) DO NOTHING
+      `,
+      [produto_id]
+    );
 
     // Atualiza estoque
     if (tipo === "entrada" || tipo === "ajuste") {
@@ -53,7 +58,6 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
     );
 
     await client.query("COMMIT");
-
     res.status(200).json({ message: "Movimentação registrada" });
   } catch (err) {
     await client.query("ROLLBACK");

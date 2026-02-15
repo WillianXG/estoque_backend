@@ -5,18 +5,30 @@ import { authMiddleware } from "./auth.js";
 const router = Router();
 
 /**
+ * GET /estoque
+ * Retorna todos os estoques
+ */
+router.get("/", authMiddleware, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT e.id, e.produto_id, e.quantidade_arara, e.quantidade_deposito
+      FROM estoque e
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: "Erro ao buscar estoque" });
+  }
+});
+
+/**
  * Entrada de estoque (somar)
- * Body:
- * {
- *   produto_id: number,
- *   quantidade: number,
- *   local: 'arara' | 'deposito'
- * }
+ * Body: { produto_id, quantidade, local: 'arara' | 'deposito' }
  */
 router.post("/entrada", authMiddleware, async (req, res) => {
   const { produto_id, quantidade, local } = req.body;
 
-  if (!produto_id || !quantidade || !local) {
+  if (!produto_id || quantidade == null || !local) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
 
@@ -39,17 +51,12 @@ router.post("/entrada", authMiddleware, async (req, res) => {
 
 /**
  * Saída de estoque (subtrair)
- * Body:
- * {
- *   produto_id: number,
- *   quantidade: number,
- *   local: 'arara' | 'deposito'
- * }
+ * Body: { produto_id, quantidade, local: 'arara' | 'deposito' }
  */
 router.post("/saida", authMiddleware, async (req, res) => {
   const { produto_id, quantidade, local } = req.body;
 
-  if (!produto_id || !quantidade || !local) {
+  if (!produto_id || quantidade == null || !local) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
 
