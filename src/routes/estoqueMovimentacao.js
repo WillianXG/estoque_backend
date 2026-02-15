@@ -78,4 +78,35 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
   }
 });
 
+
+/**
+ * GET /movimentacoes-estoque
+ * Retorna todas as movimentações com produto, autor, tipo, local, quantidade, motivo e data
+ */
+router.get("/", authMiddleware, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT 
+         m.id,
+         p.nome AS produto_nome,
+         u.nome AS autor,
+         m.tipo,
+         m.local,
+         m.quantidade,
+         m.motivo,
+         m.data
+       FROM movimentacoes_estoque m
+       JOIN produtos p ON p.id = m.produto_id
+       JOIN usuarios u ON u.id = m.usuario_id
+       ORDER BY m.data DESC
+       LIMIT 500`
+    );
+
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error("ERRO GET MOVIMENTACOES:", err);
+    res.status(500).json({ erro: "Erro ao buscar movimentações" });
+  }
+});
+
 export default router;
