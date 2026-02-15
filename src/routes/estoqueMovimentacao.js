@@ -78,11 +78,6 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
   }
 });
 
-/**
- * GET /movimentacoes-estoque
- * Retorna todas as movimentações de estoque
- * Inclui o nome do produto, nome da vendedora e quantidade anterior/nova
- */
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(`
@@ -96,29 +91,38 @@ router.get("/", authMiddleware, async (req, res) => {
         m.local,
         m.quantidade AS quantidade_mov,
         m.motivo,
-        m.data,
-        -- Quantidade atual real da tabela estoque
-        e.quantidade_arara,
-        e.quantidade_deposito
+        m.data
       FROM movimentacoes_estoque m
       LEFT JOIN produtos p ON p.id = m.produto_id
       LEFT JOIN vendedoras v ON v.id = m.usuario_id
-      LEFT JOIN estoque e ON e.produto_id = m.produto_id
       ORDER BY m.data ASC, m.id ASC
     `);
 
-    const movimentacoes = result.rows.map((m) => {
-      // Determina quantidade anterior e nova baseado no local
-      let quantidade_anterior = 0;
-      let quantidade_nova = 0;
+    // acumuladores por produto e local
+    const acumulado = {}; // { produtoId: { arara: number, deposito: number } }
 
-      if (m.local === "arara") {
-        quantidade_nova = m.quantidade_arara;
-        quantidade_anterior = m.quantidade_arara - m.quantidade_mov;
-      } else if (m.local === "deposito") {
-        quantidade_nova = m.quantidade_deposito;
-        quantidade_anterior = m.quantidade_deposito - m.quantidade_mov;
+    const movimentacoes = result.rows.map((m) => {
+      if (!acumulado[m.produto_id]) {
+        acumulado[m.produto_id] = { arara: 0, deposito: 0 };
       }
+
+      const localAtual = acumulado[m.produto_id][m.local] || 0;
+
+      // quantidade anterior é o valor antes da movimentação
+      const quantidade_anterior = localAtual;
+
+      // atualiza acumulado dependendo do tipo
+      let quantidade_nova;
+      if (m.tipo === "entrada" || m.tipo === "ajuste") {
+        quantidade_nova = quantidade_anterior + m.quantidade;
+      } else if (m.tipo === "saida") {
+        quantidade_nova = quantidade_anterior - m.quantidade;
+      } else {
+        quantidade_nova = quantidade_anterior; // segurança
+      }
+
+      // salva acumulado
+      acumulado[m.produto_id][m.local] = quantidade_nova;
 
       return {
         id: m.id,
