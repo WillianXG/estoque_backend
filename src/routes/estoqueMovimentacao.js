@@ -81,27 +81,51 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 /**
  * GET /movimentacoes-estoque
  * Retorna todas as movimentações de estoque
- * Inclui o nome do produto direto
+ * Inclui o nome do produto, nome da vendedora e quantidade anterior/nova
  */
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT 
+      `SELECT
          m.id,
          m.produto_id,
          p.nome AS produto_nome,
          m.usuario_id,
+         v.nome AS usuario_nome,
          m.tipo,
          m.local,
          m.quantidade,
          m.motivo,
-         m.data
-       FROM movimentacoes_estoque m
-       LEFT JOIN produtos p ON p.id = m.produto_id
-       ORDER BY m.data DESC, m.id DESC`
+         m.data,
+         -- quantidade anterior usando LAG
+         COALESCE(LAG(
+           CASE
+             WHEN m.tipo = 'entrada' OR m.tipo = 'ajuste' THEN m.quantidade * -1
+             WHEN m.tipo = 'saida' THEN m.quantidade
+           END
+         ) OVER (
+           PARTITION BY m.produto_id, m.local
+           ORDER BY m.data, m.id
+         ), 0) + 
+         -- para somar a movimentação atual
+         (CASE 
+            WHEN m.tipo = 'entrada' OR m.tipo = 'ajuste' THEN m.quantidade
+            WHEN m.tipo = 'saida' THEN -m.quantidade
+          END) AS quantidade_nova
+      FROM movimentacoes_estoque m
+      LEFT JOIN produtos p ON p.id = m.produto_id
+      LEFT JOIN vendedoras v ON v.id = m.usuario_id
+      ORDER BY m.data DESC, m.id DESC`
     );
 
-    res.status(200).json(result.rows);
+    // Para frontend, podemos calcular quantidade_anterior = quantidade_nova - quantidade atual
+    const movimentacoes = result.rows.map((m) => ({
+      ...m,
+      quantidade_nova: Number(m.quantidade_nova),
+      quantidade_anterior: Number(m.quantidade_nova) - Number(m.quantidade),
+    }));
+
+    res.status(200).json(movimentacoes);
   } catch (err) {
     console.error("ERRO GET MOVIMENTACOES:", err);
     res.status(500).json({ erro: "Erro ao buscar movimentações" });
