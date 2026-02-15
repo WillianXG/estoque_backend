@@ -81,7 +81,7 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
 /**
  * GET /movimentacoes-estoque
  * Retorna todas as movimentações de estoque
- * Inclui nome do produto, nome do usuário, quantidade anterior e nova
+ * Agora considera valores absolutos para quantidade anterior/nova
  */
 router.get("/", authMiddleware, async (req, res) => {
   try {
@@ -112,15 +112,22 @@ router.get("/", authMiddleware, async (req, res) => {
       const key = `${m.produto_id}_${m.local}`;
       const anterior = estoqueAtual[key] ?? 0;
 
-      // Calcula nova quantidade dependendo do tipo
-      let nova = anterior;
+      // Agora quantidade_nova é o valor absoluto que está na movimentação
+      let nova;
       if (m.tipo === "entrada" || m.tipo === "ajuste") {
-        nova = anterior + m.quantidade;
+        // Entrada ou ajuste = quantidade representa o valor final desejado
+        nova = m.quantidade;
       } else if (m.tipo === "saida") {
-        nova = anterior - m.quantidade;
+        nova = m.quantidade;
+      } else {
+        nova = anterior + m.quantidade;
       }
 
-      // Atualiza o estoqueAtual
+      // Para exibir corretamente "Antes → Depois" baseado em alteração absoluta:
+      const quantidade_anterior = anterior;
+      const quantidade_nova = nova;
+
+      // Atualiza o estoqueAtual para próximas movimentações
       estoqueAtual[key] = nova;
 
       return {
@@ -132,8 +139,8 @@ router.get("/", authMiddleware, async (req, res) => {
         tipo: m.tipo,
         local: m.local,
         quantidade: m.quantidade,
-        quantidade_anterior: anterior,
-        quantidade_nova: nova,
+        quantidade_anterior,
+        quantidade_nova,
         motivo: m.motivo,
         data: m.data,
       };
