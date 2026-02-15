@@ -22,15 +22,79 @@ router.get("/", authMiddleware, async (req, res) => {
 });
 
 /**
- * POST /movimentacoes-estoque/ajustar
- * Body: { produto_id, tipo, local, quantidade, motivo? }
- * tipo: 'entrada' | 'saida' | 'ajuste'
- * local: 'arara' | 'deposito'
+ * POST /estoque/entrada
+ * Adiciona quantidade no estoque (somar)
+ * Body: { produto_id, quantidade, local: 'arara' | 'deposito' }
+ */
+router.post("/entrada", authMiddleware, async (req, res) => {
+  const { produto_id, quantidade, local } = req.body;
+
+  if (!produto_id || quantidade == null || !local) {
+    return res.status(400).json({ erro: "Dados incompletos" });
+  }
+
+  if (!["arara", "deposito"].includes(local)) {
+    return res.status(400).json({ erro: `Local inválido: ${local}` });
+  }
+
+  try {
+    await db.query(
+      `
+      INSERT INTO estoque (produto_id, quantidade_${local})
+      VALUES ($1, $2)
+      ON CONFLICT (produto_id)
+      DO UPDATE SET quantidade_${local} = estoque.quantidade_${local} + $2
+      `,
+      [produto_id, quantidade]
+    );
+    res.status(200).json({ message: "Estoque atualizado" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: "Erro ao atualizar estoque" });
+  }
+});
+
+/**
+ * POST /estoque/saida
+ * Remove quantidade do estoque (subtrair)
+ * Body: { produto_id, quantidade, local: 'arara' | 'deposito' }
+ */
+router.post("/saida", authMiddleware, async (req, res) => {
+  const { produto_id, quantidade, local } = req.body;
+
+  if (!produto_id || quantidade == null || !local) {
+    return res.status(400).json({ erro: "Dados incompletos" });
+  }
+
+  if (!["arara", "deposito"].includes(local)) {
+    return res.status(400).json({ erro: `Local inválido: ${local}` });
+  }
+
+  try {
+    await db.query(
+      `
+      UPDATE estoque
+      SET quantidade_${local} = quantidade_${local} - $1
+      WHERE produto_id = $2
+      `,
+      [quantidade, produto_id]
+    );
+    res.status(200).json({ message: "Estoque atualizado" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: "Erro ao atualizar estoque" });
+  }
+});
+
+/**
+ * POST /estoque/ajustar
+ * Ajusta o estoque para um valor exato (substitui)
+ * Body: { produto_id, quantidade, local: 'arara' | 'deposito' }
  */
 router.post("/ajustar", authMiddleware, async (req, res) => {
-  const { produto_id, tipo, local, quantidade, motivo } = req.body;
+  const { produto_id, quantidade, local } = req.body;
 
-  if (!produto_id || !tipo || !local || quantidade == null) {
+  if (!produto_id || quantidade == null || !local) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
 
@@ -43,51 +107,25 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
     return res.status(400).json({ erro: "Quantidade inválida" });
   }
 
-  const usuarioId = req.user?.id;
-  if (!usuarioId) {
-    return res.status(401).json({ erro: "Usuário não autenticado" });
-  }
-
-  const client = await db.connect();
-
   try {
-    await client.query("BEGIN");
-
-    // Garante que o produto existe no estoque
-    await client.query(
+    // Garante que o produto exista
+    await db.query(
       `INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
        VALUES ($1, 0, 0)
        ON CONFLICT (produto_id) DO NOTHING`,
       [produto_id]
     );
 
-    // Atualiza estoque com o valor exato (não soma)
-    if (tipo === "ajuste" || tipo === "entrada" || tipo === "saida") {
-      const operador = tipo === "saida" ? "-" : ""; // só subtrair para saida
-      await client.query(
-        `UPDATE estoque SET quantidade_${local} = ${operador}$1 WHERE produto_id = $2`,
-        [quantidadeNum, produto_id]
-      );
-    } else {
-      throw new Error(`Tipo inválido: ${tipo}`);
-    }
-
-    // Registra movimentação
-    await client.query(
-      `INSERT INTO movimentacoes_estoque
-        (produto_id, usuario_id, tipo, local, quantidade, motivo)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [produto_id, usuarioId, tipo, local, quantidadeNum, motivo || ""]
+    // Substitui valor exato no estoque
+    await db.query(
+      `UPDATE estoque SET quantidade_${local} = $1 WHERE produto_id = $2`,
+      [quantidadeNum, produto_id]
     );
 
-    await client.query("COMMIT");
-    res.status(200).json({ message: "Estoque atualizado e movimentação registrada" });
+    res.status(200).json({ message: "Estoque ajustado com sucesso" });
   } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("ERRO AJUSTAR ESTOQUE:", err);
+    console.error(err);
     res.status(500).json({ erro: "Erro ao ajustar estoque" });
-  } finally {
-    client.release();
   }
 });
 
