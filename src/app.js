@@ -11,7 +11,7 @@ import produtosRoutes from "./routes/produtos.js";
 import vendasRoutes from "./routes/vendas.js";
 import estoqueMovimentacaoRoutes from "./routes/estoqueMovimentacao.js";
 import vendedorasRoutes from "./routes/vendedoras.js";
-
+import estoqueRoutes from "./routes/estoque.js";
 const app = express();
 
 /* =========================
@@ -49,7 +49,7 @@ app.use("/categorias", categoriasRoutes);
 app.use("/subcategorias", subcategoriasRoutes);
 app.use("/produtos", produtosRoutes);
 app.use("/vendas", vendasRoutes);
-app.use("/estoque", estoqueMovimentacaoRoutes);
+app.use("/estoque", estoqueRoutes);
 app.use("/movimentacoes-estoque", estoqueMovimentacaoRoutes);
 app.use("/vendedoras", vendedorasRoutes);
 
