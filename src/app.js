@@ -12,7 +12,7 @@ import vendasRoutes from "./routes/vendas.js";
 import estoqueMovimentacaoRoutes from "./routes/estoqueMovimentacao.js";
 import vendedorasRoutes from "./routes/vendedoras.js";
 import estoqueRoutes from "./routes/estoque.js";
-
+import dashboardRoutes from "./routes/dashboard.js";
 const app = express();
 
 /* =========================
@@ -52,6 +52,7 @@ app.use("/vendas", vendasRoutes);
 app.use("/estoque", estoqueRoutes); // rota GET /estoque
 app.use("/movimentacoes-estoque", estoqueMovimentacaoRoutes); // rota POST /movimentacoes-estoque/ajustar
 app.use("/vendedoras", vendedorasRoutes);
+app.use("/dashboard", dashboardRoutes);
 
 /* =========================
    ROTA TESTE
