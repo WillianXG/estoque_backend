@@ -8,7 +8,7 @@ import path from "path";
 const router = Router();
 
 /* =========================
-   CONFIG MULTER (MEMORY)
+   MULTER MEMORY (SEM DISCO)
 ========================= */
 
 const upload = multer({
@@ -24,7 +24,7 @@ async function uploadImagem(file) {
   if (!file) return null;
 
   const fileExt = path.extname(file.originalname);
-  const fileName = `${Date.now()}-${file.originalname}`;
+  const fileName = `${Date.now()}${fileExt}`;
   const filePath = `produtos/${fileName}`;
 
   const { error } = await supabase.storage
@@ -71,6 +71,7 @@ router.post(
 
       const precoVendaNum = Number(preco_venda);
       const precoCompraNum = preco_compra ? Number(preco_compra) : null;
+      const subcategoriaIdNum = Number(subcategoria_id);
 
       if (isNaN(precoVendaNum)) {
         await client.query("ROLLBACK");
@@ -82,7 +83,6 @@ router.post(
         return res.status(400).json({ erro: "Preço de compra inválido" });
       }
 
-      const subcategoriaIdNum = Number(subcategoria_id);
       if (isNaN(subcategoriaIdNum)) {
         await client.query("ROLLBACK");
         return res.status(400).json({ erro: "Subcategoria inválida" });
@@ -91,8 +91,8 @@ router.post(
       const qtd_arara = Number(req.body.qtd_arara || 0);
       const qtd_deposito = Number(req.body.qtd_deposito || 0);
 
-      // 🔥 Upload para Supabase
-      const imagem_url = await uploadImagem(req.file);
+      /* 🔥 UPLOAD SUPABASE */
+      const imagem_url = req.file ? await uploadImagem(req.file) : null;
 
       const produtoResult = await client.query(
         `
@@ -225,10 +225,10 @@ router.put(
         `
         UPDATE produtos
         SET 
-          nome=$1, 
-          preco_venda=$2, 
-          preco_compra=$3, 
-          subcategoria_id=$4, 
+          nome=$1,
+          preco_venda=$2,
+          preco_compra=$3,
+          subcategoria_id=$4,
           variacao=$5,
           imagem_url = COALESCE($6, imagem_url)
         WHERE id=$7
@@ -243,6 +243,49 @@ router.put(
           id,
         ]
       );
+
+      /* ESTOQUE */
+      const qtd_arara =
+        req.body.qtd_arara !== undefined
+          ? Number(req.body.qtd_arara)
+          : undefined;
+
+      const qtd_deposito =
+        req.body.qtd_deposito !== undefined
+          ? Number(req.body.qtd_deposito)
+          : undefined;
+
+      if (qtd_arara !== undefined || qtd_deposito !== undefined) {
+        const { rows } = await client.query(
+          `SELECT * FROM estoque WHERE produto_id=$1`,
+          [id]
+        );
+
+        if (rows.length === 0) {
+          await client.query(
+            `
+            INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
+            VALUES ($1, $2, $3)
+            `,
+            [id, qtd_arara ?? 0, qtd_deposito ?? 0]
+          );
+        } else {
+          const estoqueAtual = rows[0];
+
+          await client.query(
+            `
+            UPDATE estoque
+            SET quantidade_arara=$1, quantidade_deposito=$2
+            WHERE produto_id=$3
+            `,
+            [
+              qtd_arara ?? estoqueAtual.quantidade_arara,
+              qtd_deposito ?? estoqueAtual.quantidade_deposito,
+              id,
+            ]
+          );
+        }
+      }
 
       await client.query("COMMIT");
 
