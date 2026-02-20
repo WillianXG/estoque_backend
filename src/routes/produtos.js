@@ -2,27 +2,45 @@ import { Router } from "express";
 import multer from "multer";
 import db from "../db.js";
 import { authMiddleware } from "./auth.js";
+import supabase from "../config/supabase.js";
+import path from "path";
 
 const router = Router();
 
 /* =========================
-   CONFIG MULTER
+   CONFIG MULTER (MEMORY)
 ========================= */
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = Date.now() + "-" + file.originalname;
-    cb(null, uniqueName);
-  },
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
+
+/* =========================
+   FUNÇÃO UPLOAD SUPABASE
+========================= */
+
+async function uploadImagem(file) {
+  if (!file) return null;
+
+  const fileExt = path.extname(file.originalname);
+  const fileName = `${Date.now()}-${file.originalname}`;
+  const filePath = `produtos/${fileName}`;
+
+  const { error } = await supabase.storage
+    .from("produtos")
+    .upload(filePath, file.buffer, {
+      contentType: file.mimetype,
+    });
+
+  if (error) throw error;
+
+  const { data } = supabase.storage
+    .from("produtos")
+    .getPublicUrl(filePath);
+
+  return data.publicUrl;
+}
 
 /* =========================
    CRIAR PRODUTO
@@ -46,7 +64,6 @@ router.post(
         variacao,
       } = req.body;
 
-      // 🔒 VALIDAÇÃO OBRIGATÓRIA
       if (!nome || !preco_venda || !subcategoria_id) {
         await client.query("ROLLBACK");
         return res.status(400).json({ erro: "Campos obrigatórios não enviados" });
@@ -74,9 +91,8 @@ router.post(
       const qtd_arara = Number(req.body.qtd_arara || 0);
       const qtd_deposito = Number(req.body.qtd_deposito || 0);
 
-      const imagem_url = req.file
-        ? `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`
-        : null;
+      // 🔥 Upload para Supabase
+      const imagem_url = await uploadImagem(req.file);
 
       const produtoResult = await client.query(
         `
@@ -202,7 +218,7 @@ router.put(
       let imagem_url = null;
 
       if (req.file) {
-        imagem_url = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+        imagem_url = await uploadImagem(req.file);
       }
 
       await client.query(
@@ -227,48 +243,6 @@ router.put(
           id,
         ]
       );
-
-      const qtd_arara =
-        req.body.qtd_arara !== undefined
-          ? Number(req.body.qtd_arara)
-          : undefined;
-
-      const qtd_deposito =
-        req.body.qtd_deposito !== undefined
-          ? Number(req.body.qtd_deposito)
-          : undefined;
-
-      if (qtd_arara !== undefined || qtd_deposito !== undefined) {
-        const { rows } = await client.query(
-          `SELECT * FROM estoque WHERE produto_id=$1`,
-          [id]
-        );
-
-        if (rows.length === 0) {
-          await client.query(
-            `
-            INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
-            VALUES ($1, $2, $3)
-            `,
-            [id, qtd_arara ?? 0, qtd_deposito ?? 0]
-          );
-        } else {
-          const estoqueAtual = rows[0];
-
-          await client.query(
-            `
-            UPDATE estoque
-            SET quantidade_arara=$1, quantidade_deposito=$2
-            WHERE produto_id=$3
-            `,
-            [
-              qtd_arara ?? estoqueAtual.quantidade_arara,
-              qtd_deposito ?? estoqueAtual.quantidade_deposito,
-              id,
-            ]
-          );
-        }
-      }
 
       await client.query("COMMIT");
 
