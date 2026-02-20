@@ -287,9 +287,15 @@ router.put(
         }
       }
 
-      await client.query("COMMIT");
-
-      res.json({ msg: "Produto atualizado com sucesso" });
+    const produtoAtualizado = await client.query(
+        `
+        SELECT p.*, e.quantidade_arara, e.quantidade_deposito
+        FROM produtos p
+        LEFT JOIN estoque e ON e.produto_id = p.id
+        WHERE p.id = $1
+        `,
+        [id]
+    );
 
     } catch (err) {
       await client.query("ROLLBACK");
