@@ -296,6 +296,8 @@ router.put(
         `,
         [id]
     );
+    await client.query("COMMIT");
+    res.json(produtoAtualizado.rows[0]);
 
     } catch (err) {
       await client.query("ROLLBACK");
