@@ -7,12 +7,8 @@ const router = Router();
 router.post("/", authMiddleware, async (req, res) => {
   const { itens, forma_pagamento, observacoes, canal } = req.body;
 
-  if (!itens || itens.length === 0) {
-    return res.status(400).json({ erro: "Nenhum item na venda" });
-  }
-
-  if (!forma_pagamento || !canal) {
-    return res.status(400).json({ erro: "Forma de pagamento e canal são obrigatórios" });
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({ erro: "Usuário não autenticado" });
   }
 
   const client = await db.connect();
@@ -20,13 +16,15 @@ router.post("/", authMiddleware, async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // Calcula valor total
+    if (!itens || itens.length === 0) {
+      return res.status(400).json({ erro: "Nenhum item na venda" });
+    }
+
     const valorTotal = itens.reduce(
       (sum, item) => sum + Number(item.preco) * Number(item.quantidade),
       0
     );
 
-    // Cria venda
     const vendaRes = await client.query(
       `
       INSERT INTO vendas
@@ -34,36 +32,30 @@ router.post("/", authMiddleware, async (req, res) => {
       VALUES ($1, $2, NOW(), $3, $4, $5)
       RETURNING id
       `,
-      [req.user.id, canal, valorTotal, forma_pagamento, observacoes || null]
+      [req.user.id, canal || "pdv", valorTotal, forma_pagamento, observacoes]
     );
 
     const vendaId = vendaRes.rows[0].id;
 
-    // Loop de itens da venda
     for (const item of itens) {
-      // Verifica estoque
-      const estoqueRes = await client.query(
+      const estoqueAtual = await client.query(
         `SELECT quantidade_arara FROM estoque WHERE produto_id = $1`,
         [item.produto_id]
       );
 
-      if (estoqueRes.rows.length === 0) {
-        throw new Error(`Produto ${item.produto_id} sem estoque cadastrado`);
+      if (estoqueAtual.rows.length === 0) {
+        throw new Error("Produto sem estoque cadastrado");
       }
 
-      const estoqueAtual = estoqueRes.rows[0].quantidade_arara;
-
-      if (estoqueAtual < item.quantidade) {
-        throw new Error(`Estoque insuficiente para o produto ${item.produto_id}`);
+      if (estoqueAtual.rows[0].quantidade_arara < item.quantidade) {
+        throw new Error("Estoque insuficiente");
       }
 
-      // Atualiza estoque
       await client.query(
         `UPDATE estoque SET quantidade_arara = quantidade_arara - $1 WHERE produto_id = $2`,
         [item.quantidade, item.produto_id]
       );
 
-      // Insere item na venda
       await client.query(
         `
         INSERT INTO venda_itens
@@ -73,12 +65,11 @@ router.post("/", authMiddleware, async (req, res) => {
         [vendaId, item.produto_id, item.quantidade, item.preco]
       );
 
-      // Registra movimentação
       await client.query(
         `
         INSERT INTO movimentacoes_estoque
-        (produto_id, usuario_id, tipo, local, quantidade, motivo)
-        VALUES ($1, $2, 'saida', 'arara', $3, $4)
+        (produto_id, usuario_id, tipo, local, quantidade, motivo, data)
+        VALUES ($1, $2, 'saida', 'arara', $3, $4, NOW())
         `,
         [item.produto_id, req.user.id, item.quantidade, `Venda #${vendaId}`]
       );
@@ -86,10 +77,10 @@ router.post("/", authMiddleware, async (req, res) => {
 
     await client.query("COMMIT");
 
-    res.status(201).json({ venda_id: vendaId, mensagem: "Venda finalizada com sucesso" });
+    res.status(201).json({ venda_id: vendaId });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("ERRO AO FINALIZAR VENDA:", err.message);
+    console.error("ERRO AO FINALIZAR VENDA:", err);
     res.status(500).json({ erro: err.message });
   } finally {
     client.release();
