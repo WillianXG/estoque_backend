@@ -2,11 +2,10 @@ import { Router } from "express";
 import db from "../db.js";
 import authMiddleware from "./auth.js";
 
-
 const router = Router();
 
 router.post("/", authMiddleware, async (req, res) => {
-  const { itens, forma_pagamento, observacoes } = req.body;
+  const { itens, forma_pagamento, observacoes, canal } = req.body;
 
   const client = await db.connect();
 
@@ -17,11 +16,16 @@ router.post("/", authMiddleware, async (req, res) => {
       return res.status(400).json({ erro: "Nenhum item na venda" });
     }
 
-    const valorTotal = itens.reduce((sum, item) => {
-      return sum + Number(item.preco) * Number(item.quantidade);
-    }, 0);
+    if (!forma_pagamento || !canal) {
+      return res.status(400).json({ erro: "Forma de pagamento e canal são obrigatórios" });
+    }
 
-    // ✅ Cria venda (AGORA COM CANAL)
+    const valorTotal = itens.reduce(
+      (sum, item) => sum + Number(item.preco) * Number(item.quantidade),
+      0
+    );
+
+    // ✅ Cria venda com canal
     const vendaRes = await client.query(
       `
       INSERT INTO vendas
@@ -31,10 +35,10 @@ router.post("/", authMiddleware, async (req, res) => {
       `,
       [
         req.user.id,
-        "pdv", // 👈 aqui resolve o erro do NOT NULL
+        canal, // agora vem do front
         valorTotal,
         forma_pagamento,
-        observacoes
+        observacoes || null
       ]
     );
 
@@ -42,40 +46,31 @@ router.post("/", authMiddleware, async (req, res) => {
 
     // Itens da venda
     for (const item of itens) {
-
       // 1️⃣ Verifica estoque atual
       const estoqueAtual = await client.query(
-        `
-        SELECT quantidade_arara
-        FROM estoque
-        WHERE produto_id = $1
-        `,
+        `SELECT quantidade_arara FROM estoque WHERE produto_id = $1`,
         [item.produto_id]
       );
 
       if (estoqueAtual.rows.length === 0) {
-        throw new Error("Produto sem estoque cadastrado");
+        throw new Error(`Produto sem estoque cadastrado (ID: ${item.produto_id})`);
       }
 
       if (estoqueAtual.rows[0].quantidade_arara < item.quantidade) {
-        throw new Error("Estoque insuficiente");
+        throw new Error(`Estoque insuficiente para o produto ID: ${item.produto_id}`);
       }
 
       // 2️⃣ Atualiza estoque
       await client.query(
-        `
-        UPDATE estoque
-        SET quantidade_arara = quantidade_arara - $1
-        WHERE produto_id = $2
-        `,
+        `UPDATE estoque SET quantidade_arara = quantidade_arara - $1 WHERE produto_id = $2`,
         [item.quantidade, item.produto_id]
       );
 
       // 3️⃣ Insere item da venda
       await client.query(
         `
-        INSERT INTO venda_items
-        (venda_id, produto_id, quantidade, preco)
+        INSERT INTO venda_itens
+        (venda_id, produto_id, quantidade, preco_unitario)
         VALUES ($1, $2, $3, $4)
         `,
         [vendaId, item.produto_id, item.quantidade, item.preco]
@@ -86,16 +81,15 @@ router.post("/", authMiddleware, async (req, res) => {
         `
         INSERT INTO movimentacoes_estoque
         (produto_id, usuario_id, tipo, local, quantidade, motivo)
-        VALUES ($1, $2, 'saida', 'arara', $3, $4)
+        VALUES ($1, $2, 'saida', $3, $4, $5)
         `,
-        [item.produto_id, req.user.id, item.quantidade, `Venda #${vendaId}`]
+        [item.produto_id, req.user.id, canal, item.quantidade, `Venda #${vendaId}`]
       );
     }
 
     await client.query("COMMIT");
 
-    res.status(201).json({ venda_id: vendaId });
-
+    res.status(201).json({ venda_id: vendaId, valor_total: valorTotal });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("ERRO AO FINALIZAR VENDA:", err);
