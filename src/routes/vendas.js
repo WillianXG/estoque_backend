@@ -7,10 +7,6 @@ const router = Router();
 router.post("/", authMiddleware, async (req, res) => {
   const { itens, forma_pagamento, observacoes, canal } = req.body;
 
-  if (!req.user || !req.user.id) {
-    return res.status(401).json({ erro: "Usuário não autenticado" });
-  }
-
   const client = await db.connect();
 
   try {
