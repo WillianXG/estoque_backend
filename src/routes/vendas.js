@@ -28,7 +28,7 @@ router.post("/", authMiddleware, async (req, res) => {
       VALUES ($1, $2, NOW(), $3, $4, $5)
       RETURNING id
       `,
-      [req.user.id, canal || "pdv", valorTotal, forma_pagamento, observacoes]
+      [req.user, canal || "pdv", valorTotal, forma_pagamento, observacoes]
     );
 
     const vendaId = vendaRes.rows[0].id;
