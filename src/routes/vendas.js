@@ -65,7 +65,7 @@ router.post("/", authMiddleware, async (req, res) => {
           `UPDATE estoque SET quantidade_deposito = quantidade_deposito - $1 WHERE produto_id = $2`,
           [item.quantidade, item.produto_id]
         );
-        local = "depósito";
+        local = "deposito";
       } else {
         if (estoqueRes.rows[0].quantidade_arara < item.quantidade) {
           throw new Error(`Estoque insuficiente na arara para produto ID ${item.produto_id}`);
