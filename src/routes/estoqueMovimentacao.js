@@ -7,13 +7,11 @@ const router = Router();
 /**
  * POST /movimentacoes-estoque/ajustar
  * Body: { produto_id, tipo, local, quantidade, motivo? }
- * tipo: 'entrada' | 'saida' | 'ajuste'
- * local: 'arara' | 'deposito'
  */
+
 router.post("/ajustar", authMiddleware, async (req, res) => {
   const { produto_id, tipo, local, quantidade, motivo } = req.body;
 
-  // Validação básica
   if (!produto_id || !tipo || !local || quantidade == null) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
@@ -23,7 +21,7 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
   }
 
   const quantidadeNum = Number(quantidade);
-  if (isNaN(quantidadeNum)) {
+  if (isNaN(quantidadeNum) || quantidadeNum <= 0) {
     return res.status(400).json({ erro: "Quantidade inválida" });
   }
 
@@ -33,26 +31,50 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
   }
 
   const client = await db.connect();
+
   try {
     await client.query("BEGIN");
 
-    // Garantir que o estoque exista
+    // Garante que o estoque exista
     await client.query(
       `INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
-       VALUES ($1, 0, 0)
+       VALUES ($1,0,0)
        ON CONFLICT (produto_id) DO NOTHING`,
       [produto_id]
     );
 
-    // Atualiza estoque
-    if (tipo === "entrada" || tipo === "ajuste") {
+    // Busca estoque atual
+    const estoqueRes = await client.query(
+      `SELECT quantidade_${local} FROM estoque WHERE produto_id = $1`,
+      [produto_id]
+    );
+
+    const quantidadeAnterior = Number(
+      estoqueRes.rows[0][`quantidade_${local}`]
+    );
+
+    let quantidadeNova;
+
+    if (tipo === "saida") {
+      if (quantidadeAnterior < quantidadeNum) {
+        throw new Error("Estoque insuficiente");
+      }
+
+      quantidadeNova = quantidadeAnterior - quantidadeNum;
+
       await client.query(
-        `UPDATE estoque SET quantidade_${local} = quantidade_${local} + $1 WHERE produto_id = $2`,
+        `UPDATE estoque
+         SET quantidade_${local} = quantidade_${local} - $1
+         WHERE produto_id = $2`,
         [quantidadeNum, produto_id]
       );
-    } else if (tipo === "saida") {
+    } else if (tipo === "entrada" || tipo === "ajuste") {
+      quantidadeNova = quantidadeAnterior + quantidadeNum;
+
       await client.query(
-        `UPDATE estoque SET quantidade_${local} = quantidade_${local} - $1 WHERE produto_id = $2`,
+        `UPDATE estoque
+         SET quantidade_${local} = quantidade_${local} + $1
+         WHERE produto_id = $2`,
         [quantidadeNum, produto_id]
       );
     } else {
@@ -62,26 +84,43 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
     // Registra movimentação
     await client.query(
       `INSERT INTO movimentacoes_estoque
-        (produto_id, usuario_id, tipo, local, quantidade, motivo)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [produto_id, usuarioId, tipo, local, quantidadeNum, motivo || ""]
+      (produto_id, usuario_id, tipo, local, quantidade, motivo, quantidade_anterior, quantidade_nova, data)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+      [
+        produto_id,
+        usuarioId,
+        tipo,
+        local,
+        quantidadeNum,
+        motivo || "",
+        quantidadeAnterior,
+        quantidadeNova
+      ]
     );
 
     await client.query("COMMIT");
-    res.status(200).json({ message: "Movimentação registrada" });
+
+    res.status(200).json({
+      message: "Movimentação registrada",
+      quantidade_anterior: quantidadeAnterior,
+      quantidade_nova: quantidadeNova
+    });
+
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("ERRO AJUSTAR ESTOQUE:", err);
-    res.status(500).json({ erro: "Erro ao ajustar estoque" });
+    res.status(500).json({ erro: err.message });
   } finally {
     client.release();
   }
 });
 
+
 /**
  * GET /movimentacoes-estoque
- * Retorna todas as movimentações de estoque com quantidade antes e depois
+ * Histórico de movimentações
  */
+
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(`
@@ -93,39 +132,23 @@ router.get("/", authMiddleware, async (req, res) => {
         v.nome AS usuario_nome,
         m.tipo,
         m.local,
-        m.quantidade AS quantidade_modificada,
+        m.quantidade,
+        m.quantidade_anterior,
+        m.quantidade_nova,
         m.motivo,
-        m.data,
-        -- pega a quantidade antes da movimentação diretamente do estoque
-        CASE 
-          WHEN m.local = 'arara' THEN e.quantidade_arara - m.quantidade
-          WHEN m.local = 'deposito' THEN e.quantidade_deposito - m.quantidade
-        END AS quantidade_anterior,
-        -- quantidade depois da movimentação
-        CASE 
-          WHEN m.local = 'arara' THEN e.quantidade_arara
-          WHEN m.local = 'deposito' THEN e.quantidade_deposito
-        END AS quantidade_nova
+        m.data
       FROM movimentacoes_estoque m
-      JOIN estoque e ON e.produto_id = m.produto_id
       JOIN produtos p ON p.id = m.produto_id
       LEFT JOIN vendedoras v ON v.id = m.usuario_id
-      ORDER BY m.data ASC, m.id ASC
+      ORDER BY m.data DESC
     `);
 
-    const movimentacoes = result.rows.map((m) => ({
-      ...m,
-      quantidade_anterior: Number(m.quantidade_anterior),
-      quantidade_nova: Number(m.quantidade_nova),
-      quantidade_modificada: Number(m.quantidade_modificada),
-    }));
+    res.status(200).json(result.rows);
 
-    res.status(200).json(movimentacoes);
   } catch (err) {
     console.error("ERRO GET MOVIMENTACOES:", err);
     res.status(500).json({ erro: "Erro ao buscar movimentações" });
   }
 });
-
 
 export default router;
