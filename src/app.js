@@ -10,6 +10,7 @@ import estoqueMovimentacaoRoutes from "./routes/estoqueMovimentacao.js";
 import vendedorasRoutes from "./routes/vendedoras.js";
 import estoqueRoutes from "./routes/estoque.js";
 import dashboardRoutes from "./routes/dashboard.js";
+import freteRouter from "./routes/frete.js";
 
 const app = express();
 
