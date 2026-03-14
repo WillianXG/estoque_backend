@@ -46,7 +46,7 @@ export async function getDashboardData(req, res) {
       `SELECT p.nome, (e.quantidade_arara + e.quantidade_deposito) AS total_estoque
        FROM estoque e
        JOIN produtos p ON e.produto_id = p.id
-       WHERE (e.quantidade_arara + e.quantidade_deposito) < 5`
+       WHERE (e.quantidade_arara + e.quantidade_deposito) <= 5`
     );
     const estoqueBaixo = estoqueBaixoRes.rows;
 
