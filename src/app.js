@@ -31,6 +31,7 @@ app.use("/estoque", estoqueRoutes);
 app.use("/movimentacoes-estoque", estoqueMovimentacaoRoutes);
 app.use("/vendedoras", vendedorasRoutes);
 app.use("/dashboard", dashboardRoutes);
+app.use("/frete", freteRouter);
 
 /* =========================
    ROTA TESTE
