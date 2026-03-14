@@ -124,11 +124,13 @@ router.get("/", authMiddleware, async (req, res) => {
       SELECT v.id, v.data, v.canal, v.valor_total, v.forma_pagamento, v.observacoes,
         json_agg(json_build_object(
           'produto_id', vi.produto_id,
+          'produto_nome', p.nome,
           'quantidade', vi.quantidade,
           'preco_unitario', vi.preco_unitario
         )) AS itens
       FROM vendas v
       LEFT JOIN venda_itens vi ON vi.venda_id = v.id
+      LEFT JOIN produtos p ON p.id = vi.produto_id
       WHERE v.vendedora_id = $1
       GROUP BY v.id
       ORDER BY v.data DESC
@@ -147,13 +149,16 @@ router.get("/", authMiddleware, async (req, res) => {
  * 📖 Detalhe de uma venda específica
  * GET /vendas/:id
  */
-router.get("/", authMiddleware, async (req, res) => {
+router.get("/:id", authMiddleware, async (req, res) => {
+  const vendaId = req.params.id;
+
   if (!req.user || !req.user.id) {
     return res.status(401).json({ erro: "Usuário não autenticado" });
   }
 
   try {
-    const vendasRes = await db.query(`
+    const vendaRes = await db.query(
+      `
       SELECT v.id, v.data, v.canal, v.valor_total, v.forma_pagamento, v.observacoes,
         json_agg(json_build_object(
           'produto_id', vi.produto_id,
@@ -164,14 +169,19 @@ router.get("/", authMiddleware, async (req, res) => {
       FROM vendas v
       LEFT JOIN venda_itens vi ON vi.venda_id = v.id
       LEFT JOIN produtos p ON p.id = vi.produto_id
-      WHERE v.vendedora_id = $1
+      WHERE v.id = $1 AND v.vendedora_id = $2
       GROUP BY v.id
-      ORDER BY v.data DESC
-    `, [req.user.id]);
+      `,
+      [vendaId, req.user.id]
+    );
 
-    res.json(vendasRes.rows);
+    if (vendaRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Venda não encontrada" });
+    }
+
+    res.json(vendaRes.rows[0]);
   } catch (err) {
-    console.error("ERRO AO BUSCAR VENDAS:", err);
+    console.error("ERRO AO BUSCAR VENDA:", err);
     res.status(500).json({ erro: err.message });
   }
 });
