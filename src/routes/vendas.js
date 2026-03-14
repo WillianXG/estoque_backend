@@ -103,7 +103,6 @@ router.post("/", authMiddleware, async (req, res) => {
     res.status(201).json({ venda_id: vendaId, mensagem: "Venda realizada com sucesso!" });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("ERRO AO FINALIZAR VENDA:", err);
     res.status(500).json({ erro: err.message });
   } finally {
     client.release();
@@ -111,15 +110,10 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 /**
- * 📖 Histórico de todas as vendas do usuário logado
+ * 📖 Histórico de todas as vendas
  * GET /vendas
  */
 router.get("/", authMiddleware, async (req, res) => {
-  console.log("USUÁRIO LOGADO:", req.user.id);
-  if (!req.user || !req.user.id) {
-    return res.status(401).json({ erro: "Usuário não autenticado" });
-  }
-
   try {
     const vendasRes = await db.query(
       `
@@ -141,16 +135,13 @@ router.get("/", authMiddleware, async (req, res) => {
       FROM vendas v
       LEFT JOIN venda_itens vi ON vi.venda_id = v.id
       LEFT JOIN produtos p ON p.id = vi.produto_id
-      WHERE v.vendedora_id = $1
       GROUP BY v.id
       ORDER BY v.data DESC
-      `,
-      [req.user.id]
+      `
     );
 
     res.json(vendasRes.rows);
   } catch (err) {
-    console.error("ERRO AO BUSCAR VENDAS:", err);
     res.status(500).json({ erro: err.message });
   }
 });
