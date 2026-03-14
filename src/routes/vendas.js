@@ -115,6 +115,7 @@ router.post("/", authMiddleware, async (req, res) => {
  * GET /vendas
  */
 router.get("/", authMiddleware, async (req, res) => {
+  console.log("USUÁRIO LOGADO:", req.user.id);
   if (!req.user || !req.user.id) {
     return res.status(401).json({ erro: "Usuário não autenticado" });
   }
