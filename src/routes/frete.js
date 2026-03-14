@@ -1,24 +1,20 @@
 // backend/src/routes/frete.js
-const express = require("express");
-const axios = require("axios");
+import express from "express";
+import axios from "axios";
 
 const router = express.Router();
 
 // Função para gerar token sandbox
 async function gerarToken() {
-  try {
-    const res = await axios.post(
-      "https://sandbox.melhorenvio.com.br/api/v2/login",
-      {
-        client_id: "23152", // seu Client ID
-        client_secret: "RYSzcXPflXCoN2PmDQp45cSp9LIggYvXC4rcPRyV" // seu Secret
-      }
-    );
-    return res.data.access_token;
-  } catch (err) {
-    console.error("Erro ao gerar token:", err.response?.data || err);
-    throw err;
-  }
+  const res = await axios.post(
+    "https://sandbox.melhorenvio.com.br/api/v2/oauth/token",
+    {
+      grant_type: "client_credentials",
+      client_id: "23152", // seu Client ID
+      client_secret: "RYSzcXPflXCoN2PmDQp45cSp9LIggYvXC4rcPRyV" // seu Secret
+    }
+  );
+  return res.data.access_token;
 }
 
 // POST /frete
@@ -34,9 +30,9 @@ router.post("/", async (req, res) => {
     const response = await axios.post(
       "https://sandbox.melhorenvio.com.br/api/v2/me/shipment/calculate",
       {
-        from: { postal_code: "26587000" }, // CEP da loja
+        from: { postal_code: "26587000" },
         to: { postal_code: cepDestino.replace(/\D/g, "") },
-        parcels: pacotes, // precisa ser parcels
+        parcels: pacotes,
         options: { receipt: false, own_hand: false },
       },
       {
@@ -47,7 +43,6 @@ router.post("/", async (req, res) => {
       }
     );
 
-    // Retorna o menor valor
     const menorFrete = Math.min(...response.data.map(c => c.price));
 
     res.json({ valor: menorFrete });
@@ -57,4 +52,4 @@ router.post("/", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
