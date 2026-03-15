@@ -287,7 +287,7 @@ router.put(
         }
       }
 
-    const produtoAtualizado = await client.query(
+      const produtoAtualizado = await client.query(
         `
         SELECT p.*, e.quantidade_arara, e.quantidade_deposito
         FROM produtos p
@@ -295,9 +295,9 @@ router.put(
         WHERE p.id = $1
         `,
         [id]
-    );
-    await client.query("COMMIT");
-    res.json(produtoAtualizado.rows[0]);
+      );
+      await client.query("COMMIT");
+      res.json(produtoAtualizado.rows[0]);
 
     } catch (err) {
       await client.query("ROLLBACK");
@@ -319,6 +319,12 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 
   try {
     await client.query("BEGIN");
+
+    // apagar itens de venda
+    await client.query(
+      `DELETE FROM venda_itens WHERE produto_id = $1`,
+      [id]
+    );
 
     // apagar movimentações
     await client.query(
