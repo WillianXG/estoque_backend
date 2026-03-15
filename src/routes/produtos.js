@@ -309,4 +309,46 @@ router.put(
   }
 );
 
+/* =========================
+   DELETAR PRODUTO
+========================= */
+
+router.delete("/:id", authMiddleware, async (req, res) => {
+  const { id } = req.params;
+  const client = await db.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // apagar movimentações
+    await client.query(
+      `DELETE FROM movimentacoes_estoque WHERE produto_id = $1`,
+      [id]
+    );
+
+    // apagar estoque
+    await client.query(
+      `DELETE FROM estoque WHERE produto_id = $1`,
+      [id]
+    );
+
+    // apagar produto
+    await client.query(
+      `DELETE FROM produtos WHERE id = $1`,
+      [id]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({ message: "Produto deletado com sucesso" });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ERRO REAL:", err);
+    res.status(500).json({ erro: "Erro ao deletar produto" });
+  } finally {
+    client.release();
+  }
+});
+
 export default router;
