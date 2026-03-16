@@ -88,7 +88,8 @@ router.get("/me", authMiddleware, (req, res) => {
     res.json({
         id: req.user.id,
         nome: req.user.nome,
-        codigo: req.user.codigo
+        codigo: req.user.codigo,
+        role: req.user.role
     });
 });
 
