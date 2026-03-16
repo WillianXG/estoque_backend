@@ -70,7 +70,7 @@ router.post("/login", async (req, res) => {
             id: vendedora.id,
             nome: vendedora.nome,
             codigo: vendedora.codigo,
-            vendedora: vendedora.role
+            role: vendedora.role
         },
         process.env.JWT_SECRET,
         { expiresIn: "1d" }
