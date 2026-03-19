@@ -8,9 +8,8 @@ import path from "path";
 const router = Router();
 
 /* =========================
-   MULTER
+   MULTER (Configuração de Upload)
 ========================= */
-
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },
@@ -19,47 +18,30 @@ const upload = multer({
 /* =========================
    UPLOAD SUPABASE
 ========================= */
-
 async function uploadImagem(file) {
   if (!file) return null;
-
   const fileExt = path.extname(file.originalname);
   const fileName = `${Date.now()}${fileExt}`;
   const filePath = `produtos/${fileName}`;
 
   const { error } = await supabase.storage
     .from("produtos")
-    .upload(filePath, file.buffer, {
-      contentType: file.mimetype,
-    });
+    .upload(filePath, file.buffer, { contentType: file.mimetype });
 
   if (error) throw error;
-
-  const { data } = supabase.storage
-    .from("produtos")
-    .getPublicUrl(filePath);
-
+  const { data } = supabase.storage.from("produtos").getPublicUrl(filePath);
   return data.publicUrl;
 }
 
 /* =========================
-   CRIAR PRODUTO
+   CRIAR PRODUTO (POST)
 ========================= */
-
 router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
   const client = await db.connect();
-
   try {
     await client.query("BEGIN");
 
-    const {
-      nome,
-      preco_venda,
-      preco_compra,
-      subcategoria_id,
-      variacao,
-      variantes, // pegamos aqui do body
-    } = req.body;
+    const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
 
     if (!nome || !preco_venda || !subcategoria_id) {
       await client.query("ROLLBACK");
@@ -68,53 +50,39 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const imagem_url = req.file ? await uploadImagem(req.file) : null;
 
-    // Criar produto
     const produto = await client.query(
-      `
-      INSERT INTO produtos 
-      (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),true)
-      RETURNING id
-      `,
-      [
-        nome,
-        Number(preco_venda),
-        preco_compra ? Number(preco_compra) : null,
-        Number(subcategoria_id),
-        variacao || "",
-        imagem_url,
-        req.user.id,
-      ]
+      `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),true) RETURNING id`,
+      [nome, Number(preco_venda), preco_compra ? Number(preco_compra) : null, Number(subcategoria_id), variacao || "", imagem_url, req.user.id]
     );
 
     const produtoId = produto.rows[0].id;
 
-    // Inserir variantes, se houver
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
-
+      
       for (const v of parsedVariantes) {
         await client.query(
-          `
-          INSERT INTO produto_variantes
-          (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
-          VALUES ($1,$2,$3,$4,$5)
-          `,
-          [
-            produtoId,
-            v.variacao,
-            v.tamanho,
-            Number(v.quantidade_arara) || 0,
-            Number(v.quantidade_deposito) || 0
-          ]
+          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [produtoId, v.variacao, v.tamanho, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
         );
+
+        // REGISTRO DE MOVIMENTAÇÃO (Usando as colunas reais do seu banco)
+        const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
+        if (qtdTotal > 0) {
+          await client.query(
+            `INSERT INTO movimentacoes_estoque 
+             (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
+             VALUES ($1, 'ENTRADA', $2, 'Estoque Inicial (Cadastro)', $3, NOW(), 'SISTEMA', 0, $2)`,
+            [produtoId, qtdTotal, req.user.id]
+          );
+        }
       }
     }
 
     await client.query("COMMIT");
-
     res.status(201).json({ id: produtoId });
-
   } catch (err) {
     await client.query("ROLLBACK");
     console.error(err);
@@ -125,35 +93,30 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 });
 
 /* =========================
-   LISTAR PRODUTOS
+   LISTAR PRODUTOS (GET)
 ========================= */
-
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT 
-  p.*,
-  COALESCE(
-    json_agg(
-      json_build_object(
-        'id', v.id,
-        'variacao', v.variacao,
-        'tamanho', v.tamanho,
-        'quantidade_arara', v.quantidade_arara,
-        'quantidade_deposito', v.quantidade_deposito
-      )
-    ) FILTER (WHERE v.id IS NOT NULL),
-    '[]'
-  ) as variantes
-FROM produtos p
-LEFT JOIN produto_variantes v ON v.produto_id = p.id
-WHERE p.ativo = true
-GROUP BY p.id
-ORDER BY p.nome;
+      SELECT p.*,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'id', v.id,
+            'variacao', v.variacao,
+            'tamanho', v.tamanho,
+            'quantidade_arara', v.quantidade_arara,
+            'quantidade_deposito', v.quantidade_deposito
+          )
+        ) FILTER (WHERE v.id IS NOT NULL), '[]'
+      ) as variantes
+      FROM produtos p
+      LEFT JOIN produto_variantes v ON v.produto_id = p.id
+      WHERE p.ativo = true
+      GROUP BY p.id
+      ORDER BY p.nome;
     `);
-
     res.json(result.rows);
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: "Erro ao buscar produtos" });
@@ -161,69 +124,64 @@ ORDER BY p.nome;
 });
 
 /* =========================
-   ATUALIZAR PRODUTO
+   ATUALIZAR PRODUTO (PUT)
 ========================= */
-
 router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => {
   const { id } = req.params;
   const client = await db.connect();
-
   try {
     await client.query("BEGIN");
 
-    const {
-      nome,
-      preco_venda,
-      preco_compra,
-      subcategoria_id,
-      variacao,
-      qtd_arara,
-      qtd_deposito,
-    } = req.body;
+    const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
 
     let imagem_url = null;
-
-    if (req.file) {
-      imagem_url = await uploadImagem(req.file);
-    }
+    if (req.file) imagem_url = await uploadImagem(req.file);
 
     await client.query(
-      `
-      UPDATE produtos
-      SET 
-        nome=$1,
-        preco_venda=$2,
-        preco_compra=$3,
-        subcategoria_id=$4,
-        variacao=$5,
-        imagem_url = COALESCE($6, imagem_url)
-      WHERE id=$7
-      `,
-      [
-        nome,
-        Number(preco_venda),
-        preco_compra ? Number(preco_compra) : null,
-        Number(subcategoria_id),
-        variacao || "",
-        imagem_url,
-        id,
-      ]
+      `UPDATE produtos SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
+       imagem_url = COALESCE($6, imagem_url) WHERE id=$7`,
+      [nome, Number(preco_venda), preco_compra ? Number(preco_compra) : null, Number(subcategoria_id), variacao || "", imagem_url, id]
     );
 
+    if (variantes) {
+      const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
+      
+      // Sincronização: Deleta antigas e insere novas
+      await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
+
+      for (const v of parsedVariantes) {
+        await client.query(
+          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [id, v.variacao, v.tamanho, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
+        );
+      }
+
+      // REGISTRO DE MOVIMENTAÇÃO (Log de Ajuste)
+      await client.query(
+        `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data, local)
+         VALUES ($1, 'AJUSTE', 0, 'Alteração de dados/estoque via editor', $2, NOW(), 'SISTEMA')`,
+        [id, req.user.id]
+      );
+    }
+
     const produtoAtualizado = await client.query(
-      `
-      SELECT p.*, e.quantidade_arara, e.quantidade_deposito
-      FROM produtos p
-      LEFT JOIN estoque e ON e.produto_id = p.id
-      WHERE p.id = $1
-      `,
+      `SELECT p.*, 
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', v.id, 'variacao', v.variacao, 'tamanho', v.tamanho, 
+              'quantidade_arara', v.quantidade_arara, 'quantidade_deposito', v.quantidade_deposito
+            )
+          ) FILTER (WHERE v.id IS NOT NULL), '[]'
+        ) as variantes
+      FROM produtos p LEFT JOIN produto_variantes v ON v.produto_id = p.id
+      WHERE p.id = $1 GROUP BY p.id`,
       [id]
     );
 
     await client.query("COMMIT");
-
     res.json(produtoAtualizado.rows[0]);
-
   } catch (err) {
     await client.query("ROLLBACK");
     console.error(err);
@@ -233,58 +191,14 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
   }
 });
 
-router.post("/variantes", authMiddleware, async (req, res) => {
-  const client = await db.connect();
-
-  try {
-    const {
-      produto_id,
-      variacao,
-      tamanho,
-      qtd_arara = 0,
-      qtd_deposito = 0
-    } = req.body;
-
-    const result = await client.query(
-      `
-      INSERT INTO produto_variantes
-      (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
-      VALUES ($1,$2,$3,$4,$5)
-      RETURNING *
-      `,
-      [produto_id, variacao, tamanho, qtd_arara, qtd_deposito]
-    );
-
-    res.json(result.rows[0]);
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ erro: "Erro ao criar variante" });
-  } finally {
-    client.release();
-  }
-});
-
 /* =========================
-   DESATIVAR PRODUTO
+   DESATIVAR PRODUTO (DELETE)
 ========================= */
-
 router.delete("/:id", authMiddleware, async (req, res) => {
   const { id } = req.params;
-
   try {
-
-    await db.query(
-      `
-      UPDATE produtos
-      SET ativo = false
-      WHERE id = $1
-      `,
-      [id]
-    );
-
+    await db.query("UPDATE produtos SET ativo = false WHERE id = $1", [id]);
     res.json({ message: "Produto desativado com sucesso" });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: "Erro ao remover produto" });

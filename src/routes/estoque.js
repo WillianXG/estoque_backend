@@ -6,13 +6,22 @@ const router = Router();
 
 /**
  * GET /estoque
- * Retorna todos os estoques
+ * Retorna todos os estoques detalhados por grade (Cor e Tamanho)
  */
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT e.id, e.produto_id, e.quantidade_arara, e.quantidade_deposito
+      SELECT 
+        e.id, 
+        e.produto_id, 
+        p.nome AS produto_nome,
+        e.cor,
+        e.tamanho,
+        e.quantidade_arara, 
+        e.quantidade_deposito
       FROM estoque e
+      JOIN produtos p ON p.id = e.produto_id
+      ORDER BY p.nome ASC, e.cor ASC, e.tamanho ASC
     `);
     res.json(result.rows);
   } catch (err) {
@@ -23,29 +32,27 @@ router.get("/", authMiddleware, async (req, res) => {
 
 /**
  * POST /estoque/entrada
- * Adiciona quantidade no estoque (somar)
- * Body: { produto_id, quantidade, local: 'arara' | 'deposito' }
+ * Adiciona quantidade no estoque (Soma na grade específica)
  */
 router.post("/entrada", authMiddleware, async (req, res) => {
-  const { produto_id, quantidade, local } = req.body;
+  const { produto_id, cor, tamanho, quantidade, local } = req.body;
 
   if (!produto_id || quantidade == null || !local) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
 
-  if (!["arara", "deposito"].includes(local)) {
-    return res.status(400).json({ erro: `Local inválido: ${local}` });
-  }
+  const corFinal = cor || "Padrão";
+  const tamanhoFinal = tamanho || "Único";
 
   try {
     await db.query(
       `
-      INSERT INTO estoque (produto_id, quantidade_${local})
-      VALUES ($1, $2)
-      ON CONFLICT (produto_id)
-      DO UPDATE SET quantidade_${local} = estoque.quantidade_${local} + $2
+      INSERT INTO estoque (produto_id, cor, tamanho, quantidade_${local})
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (produto_id, cor, tamanho)
+      DO UPDATE SET quantidade_${local} = estoque.quantidade_${local} + $4
       `,
-      [produto_id, quantidade]
+      [produto_id, corFinal, tamanhoFinal, quantidade]
     );
     res.status(200).json({ message: "Estoque atualizado" });
   } catch (err) {
@@ -56,28 +63,26 @@ router.post("/entrada", authMiddleware, async (req, res) => {
 
 /**
  * POST /estoque/saida
- * Remove quantidade do estoque (subtrair)
- * Body: { produto_id, quantidade, local: 'arara' | 'deposito' }
+ * Remove quantidade do estoque (Subtrai na grade específica)
  */
 router.post("/saida", authMiddleware, async (req, res) => {
-  const { produto_id, quantidade, local } = req.body;
+  const { produto_id, cor, tamanho, quantidade, local } = req.body;
 
   if (!produto_id || quantidade == null || !local) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
 
-  if (!["arara", "deposito"].includes(local)) {
-    return res.status(400).json({ erro: `Local inválido: ${local}` });
-  }
+  const corFinal = cor || "Padrão";
+  const tamanhoFinal = tamanho || "Único";
 
   try {
     await db.query(
       `
       UPDATE estoque
       SET quantidade_${local} = quantidade_${local} - $1
-      WHERE produto_id = $2
+      WHERE produto_id = $2 AND cor = $3 AND tamanho = $4
       `,
-      [quantidade, produto_id]
+      [quantidade, produto_id, corFinal, tamanhoFinal]
     );
     res.status(200).json({ message: "Estoque atualizado" });
   } catch (err) {
@@ -88,38 +93,33 @@ router.post("/saida", authMiddleware, async (req, res) => {
 
 /**
  * POST /estoque/ajustar
- * Ajusta o estoque para um valor exato (substitui)
- * Body: { produto_id, quantidade, local: 'arara' | 'deposito' }
+ * Ajusta o estoque para um valor exato (Substitui na grade específica)
  */
 router.post("/ajustar", authMiddleware, async (req, res) => {
-  const { produto_id, quantidade, local } = req.body;
+  const { produto_id, cor, tamanho, quantidade, local } = req.body;
 
   if (!produto_id || quantidade == null || !local) {
     return res.status(400).json({ erro: "Dados incompletos" });
   }
 
-  if (!["arara", "deposito"].includes(local)) {
-    return res.status(400).json({ erro: `Local inválido: ${local}` });
-  }
-
+  const corFinal = cor || "Padrão";
+  const tamanhoFinal = tamanho || "Único";
   const quantidadeNum = Number(quantidade);
-  if (isNaN(quantidadeNum)) {
-    return res.status(400).json({ erro: "Quantidade inválida" });
-  }
 
   try {
-    // Garante que o produto exista
+    // Garante que o registro exista para a variação
     await db.query(
-      `INSERT INTO estoque (produto_id, quantidade_arara, quantidade_deposito)
-       VALUES ($1, 0, 0)
-       ON CONFLICT (produto_id) DO NOTHING`,
-      [produto_id]
+      `INSERT INTO estoque (produto_id, cor, tamanho, quantidade_arara, quantidade_deposito)
+       VALUES ($1, $2, $3, 0, 0)
+       ON CONFLICT (produto_id, cor, tamanho) DO NOTHING`,
+      [produto_id, corFinal, tamanhoFinal]
     );
 
-    // Substitui valor exato no estoque
+    // Substitui pelo valor exato
     await db.query(
-      `UPDATE estoque SET quantidade_${local} = $1 WHERE produto_id = $2`,
-      [quantidadeNum, produto_id]
+      `UPDATE estoque SET quantidade_${local} = $1 
+       WHERE produto_id = $2 AND cor = $3 AND tamanho = $4`,
+      [quantidadeNum, produto_id, corFinal, tamanhoFinal]
     );
 
     res.status(200).json({ message: "Estoque ajustado com sucesso" });
