@@ -140,9 +140,9 @@ router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(`
       SELECT 
-        p.*, 
-        e.quantidade_arara,
-        e.quantidade_deposito
+      p.*, 
+      COALESCE(e.quantidade_arara, 0) as quantidade_arara,
+      COALESCE(e.quantidade_deposito, 0) as quantidade_deposito
       FROM produtos p
       LEFT JOIN estoque e ON e.produto_id = p.id
       WHERE p.ativo = true
