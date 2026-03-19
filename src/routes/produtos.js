@@ -8,7 +8,7 @@ import path from "path";
 const router = Router();
 
 /* =========================
-   MULTER (Configuração de Upload)
+   MULTER (Memória para Upload)
 ========================= */
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -16,7 +16,7 @@ const upload = multer({
 });
 
 /* =========================
-   UPLOAD SUPABASE
+   UPLOAD SUPABASE (Auxiliar)
 ========================= */
 async function uploadImagem(file) {
   if (!file) return null;
@@ -43,38 +43,45 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
 
-    if (!nome || !preco_venda || !subcategoria_id) {
+    // 1. Tratamento de tipos (Evita erro 500 por NaN ou String vazia no SQL)
+    const idSub = parseInt(subcategoria_id);
+    const pVenda = parseFloat(String(preco_venda).replace(',', '.'));
+    const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(',', '.')) : null;
+
+    if (!nome || isNaN(idSub) || isNaN(pVenda)) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ erro: "Campos obrigatórios não enviados" });
+      return res.status(400).json({ erro: "Campos obrigatórios inválidos: Nome, Preço ou Subcategoria." });
     }
 
     const imagem_url = req.file ? await uploadImagem(req.file) : null;
 
+    // 2. Inserção do Produto
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),true) RETURNING id`,
-      [nome, Number(preco_venda), preco_compra ? Number(preco_compra) : null, Number(subcategoria_id), variacao || "", imagem_url, req.user.id]
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
+      [nome, pVenda, pCompra, idSub, variacao || "", imagem_url, req.user.id]
     );
 
     const produtoId = produto.rows[0].id;
 
+    // 3. Inserção de Variantes e Estoque Inicial
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
       
       for (const v of parsedVariantes) {
         await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [produtoId, v.variacao, v.tamanho, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
+           VALUES ($1, $2, $3, $4, $5)`,
+          [produtoId, v.variacao || "", v.tamanho || "", Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
         );
 
-        // REGISTRO DE MOVIMENTAÇÃO (Usando as colunas reais do seu banco)
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
+        
         if (qtdTotal > 0) {
+          // Nota: Certifique-se que sua tabela 'movimentacoes_estoque' tem exatamente essas colunas
           await client.query(
-            `INSERT INTO movimentacoes_estoque 
-             (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
-             VALUES ($1, 'ENTRADA', $2, 'Estoque Inicial (Cadastro)', $3, NOW(), 'SISTEMA', 0, $2)`,
+            `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data)
+             VALUES ($1, 'ENTRADA', $2, 'Estoque Inicial (Cadastro)', $3, NOW())`,
             [produtoId, qtdTotal, req.user.id]
           );
         }
@@ -84,9 +91,66 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
     await client.query("COMMIT");
     res.status(201).json({ id: produtoId });
   } catch (err) {
-    await client.query("ROLLBACK");
-    console.error(err);
-    res.status(500).json({ erro: "Erro ao criar produto" });
+    if (client) await client.query("ROLLBACK");
+    console.error("ERRO CRÍTICO NO POST /PRODUTOS:", err);
+    res.status(500).json({ erro: "Erro interno no servidor", detalhes: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/* =========================
+   ATUALIZAR PRODUTO (PUT)
+========================= */
+router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => {
+  const { id } = req.params;
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
+    
+    const idSub = parseInt(subcategoria_id);
+    const pVenda = parseFloat(String(preco_venda).replace(',', '.'));
+    const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(',', '.')) : null;
+
+    let imagem_url = null;
+    if (req.file) imagem_url = await uploadImagem(req.file);
+
+    // Update básico do produto
+    await client.query(
+      `UPDATE produtos SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
+       imagem_url = COALESCE($6, imagem_url) WHERE id=$7`,
+      [nome, pVenda, pCompra, idSub, variacao || "", imagem_url, id]
+    );
+
+    if (variantes) {
+      const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
+      
+      // Sincronização: Deleta variantes antigas e reinsere
+      await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
+
+      for (const v of parsedVariantes) {
+        await client.query(
+          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [id, v.variacao || "", v.tamanho || "", Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
+        );
+      }
+
+      await client.query(
+        `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data)
+         VALUES ($1, 'AJUSTE', 0, 'Alteração via editor', $2, NOW())`,
+        [id, req.user.id]
+      );
+    }
+
+    await client.query("COMMIT");
+    res.json({ mensagem: "Produto atualizado com sucesso" });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK");
+    console.error("ERRO NO PUT /PRODUTOS:", err);
+    res.status(500).json({ erro: "Erro ao atualizar produto" });
   } finally {
     client.release();
   }
@@ -118,76 +182,8 @@ router.get("/", authMiddleware, async (req, res) => {
     `);
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
+    console.error("ERRO NO GET /PRODUTOS:", err);
     res.status(500).json({ erro: "Erro ao buscar produtos" });
-  }
-});
-
-/* =========================
-   ATUALIZAR PRODUTO (PUT)
-========================= */
-router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => {
-  const { id } = req.params;
-  const client = await db.connect();
-  try {
-    await client.query("BEGIN");
-
-    const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
-
-    let imagem_url = null;
-    if (req.file) imagem_url = await uploadImagem(req.file);
-
-    await client.query(
-      `UPDATE produtos SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
-       imagem_url = COALESCE($6, imagem_url) WHERE id=$7`,
-      [nome, Number(preco_venda), preco_compra ? Number(preco_compra) : null, Number(subcategoria_id), variacao || "", imagem_url, id]
-    );
-
-    if (variantes) {
-      const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
-      
-      // Sincronização: Deleta antigas e insere novas
-      await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
-
-      for (const v of parsedVariantes) {
-        await client.query(
-          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [id, v.variacao, v.tamanho, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
-        );
-      }
-
-      // REGISTRO DE MOVIMENTAÇÃO (Log de Ajuste)
-      await client.query(
-        `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data, local)
-         VALUES ($1, 'AJUSTE', 0, 'Alteração de dados/estoque via editor', $2, NOW(), 'SISTEMA')`,
-        [id, req.user.id]
-      );
-    }
-
-    const produtoAtualizado = await client.query(
-      `SELECT p.*, 
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', v.id, 'variacao', v.variacao, 'tamanho', v.tamanho, 
-              'quantidade_arara', v.quantidade_arara, 'quantidade_deposito', v.quantidade_deposito
-            )
-          ) FILTER (WHERE v.id IS NOT NULL), '[]'
-        ) as variantes
-      FROM produtos p LEFT JOIN produto_variantes v ON v.produto_id = p.id
-      WHERE p.id = $1 GROUP BY p.id`,
-      [id]
-    );
-
-    await client.query("COMMIT");
-    res.json(produtoAtualizado.rows[0]);
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error(err);
-    res.status(500).json({ erro: "Erro ao atualizar produto" });
-  } finally {
-    client.release();
   }
 });
 
@@ -200,7 +196,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
     await db.query("UPDATE produtos SET ativo = false WHERE id = $1", [id]);
     res.json({ message: "Produto desativado com sucesso" });
   } catch (err) {
-    console.error(err);
+    console.error("ERRO NO DELETE /PRODUTOS:", err);
     res.status(500).json({ erro: "Erro ao remover produto" });
   }
 });
