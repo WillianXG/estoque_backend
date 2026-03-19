@@ -1,3 +1,9 @@
+import { Router } from "express";
+import db from "../db.js"; // Verifique se o caminho para o seu arquivo de banco está correto
+import { authMiddleware } from "./auth.js"; // Verifique se o caminho para o seu middleware está correto
+
+const router = Router();
+
 router.post("/ajustar", authMiddleware, async (req, res) => {
   const { produto_id, cor, tamanho, tipo, local, quantidade, motivo } = req.body;
 
