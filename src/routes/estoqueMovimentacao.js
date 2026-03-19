@@ -83,3 +83,5 @@ router.post("/ajustar", authMiddleware, async (req, res) => {
     client.release();
   }
 });
+
+export default router;
