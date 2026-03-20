@@ -21,6 +21,7 @@ router.get("/", authMiddleware, async (req, res) => {
         e.quantidade_deposito
       FROM estoque e
       JOIN produtos p ON p.id = e.produto_id
+      WHERE p.ativo = true  -- <--- ADICIONE ESTA LINHA
       ORDER BY p.nome ASC, e.cor ASC, e.tamanho ASC
     `);
     res.json(result.rows);
