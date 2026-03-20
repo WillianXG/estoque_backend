@@ -7,17 +7,11 @@ import path from "path";
 
 const router = Router();
 
-/* =========================
-   CONFIGURAÇÃO MULTER
-========================= */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-/* =========================
-   FUNÇÃO UPLOAD SUPABASE
-========================= */
 async function uploadImagem(file) {
   if (!file) return null;
   const fileExt = path.extname(file.originalname);
@@ -43,19 +37,17 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
 
-    // Tratamento de tipos e conversão de moeda
     const idSub = parseInt(subcategoria_id);
     const pVenda = parseFloat(String(preco_venda).replace(',', '.'));
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(',', '.')) : null;
 
     if (!nome || isNaN(idSub) || isNaN(pVenda)) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ erro: "Dados obrigatórios inválidos ou incompletos." });
+      return res.status(400).json({ erro: "Dados obrigatórios inválidos." });
     }
 
     const imagem_url = req.file ? await uploadImagem(req.file) : null;
 
-    // 1. Inserir Produto Principal
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
@@ -64,12 +56,10 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const produtoId = produto.rows[0].id;
 
-    // 2. Inserir Variantes e Histórico de Movimentação
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
       
       for (const v of parsedVariantes) {
-        // Inserção na tabela de variantes
         await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
            VALUES ($1, $2, $3, $4, $5)`,
@@ -78,8 +68,8 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
         
-        // Registro de Movimentação - AJUSTADO PARA CHECK CONSTRAINT
         if (qtdTotal > 0) {
+          // AQUI ESTÁ O SEGREDO: Usando 'arara' exatamente como está na trava do banco
           await client.query(
             `INSERT INTO movimentacoes_estoque 
              (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
@@ -91,11 +81,11 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
     }
 
     await client.query("COMMIT");
-    res.status(201).json({ id: produtoId, mensagem: "Produto cadastrado com sucesso!" });
+    res.status(201).json({ id: produtoId });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO NO POST /PRODUTOS:", err.message);
-    res.status(500).json({ erro: "Erro ao salvar produto", detalhes: err.message });
+    console.error("ERRO NO POST:", err.message);
+    res.status(500).json({ erro: "Erro ao salvar", detalhes: err.message });
   } finally {
     client.release();
   }
@@ -119,7 +109,6 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
     let imagem_url = null;
     if (req.file) imagem_url = await uploadImagem(req.file);
 
-    // Atualiza dados básicos do produto
     await client.query(
       `UPDATE produtos SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
        imagem_url = COALESCE($6, imagem_url) WHERE id=$7`,
@@ -128,8 +117,6 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
 
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
-      
-      // Remove variantes antigas para reinserir as novas (Sincronização)
       await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
 
       for (const v of parsedVariantes) {
@@ -140,11 +127,10 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
         );
       }
 
-      // Log de Ajuste na movimentação - AJUSTADO PARA CHECK CONSTRAINT
+      // Ajuste no local para 'arara' no PUT também
       await client.query(
-        `INSERT INTO movimentacoes_estoque 
-         (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
-         VALUES ($1, 'AJUSTE', 0, 'Alteração via editor', $2, NOW(), 'arara', 0, 0)`,
+        `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
+         VALUES ($1, 'AJUSTE', 0, 'Editado', $2, NOW(), 'arara', 0, 0)`,
         [id, req.user.id]
       );
     }
@@ -153,7 +139,7 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
     res.json({ mensagem: "Produto atualizado com sucesso" });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO NO PUT /PRODUTOS:", err.message);
+    console.error("ERRO NO PUT:", err.message);
     res.status(500).json({ erro: "Erro ao atualizar produto", detalhes: err.message });
   } finally {
     client.release();
@@ -185,7 +171,6 @@ router.get("/", authMiddleware, async (req, res) => {
       ORDER BY p.nome;
     `);
     
-    // Converte os preços de string (Postgres Numeric) para float
     const rows = result.rows.map(row => ({
       ...row,
       preco_venda: parseFloat(row.preco_venda),
