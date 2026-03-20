@@ -69,11 +69,11 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
         
         if (qtdTotal > 0) {
-          // AQUI ESTÁ O SEGREDO: Usando 'arara' exatamente como está na trava do banco
+          // CORREÇÃO: 'entrada' e 'arara' em minúsculo para bater com o banco
           await client.query(
             `INSERT INTO movimentacoes_estoque 
              (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
-             VALUES ($1, 'ENTRADA', $2, 'Estoque Inicial', $3, NOW(), 'arara', 0, $2, $4, $5)`,
+             VALUES ($1, 'entrada', $2, 'Estoque Inicial', $3, NOW(), 'arara', 0, $2, $4, $5)`,
             [produtoId, qtdTotal, req.user.id, v.variacao || "", v.tamanho || ""]
           );
         }
@@ -127,20 +127,19 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
         );
       }
 
-      // Ajuste no local para 'arara' no PUT também
+      // Ajuste com 'ajuste' e 'arara' em minúsculo
       await client.query(
         `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
-         VALUES ($1, 'AJUSTE', 0, 'Editado', $2, NOW(), 'arara', 0, 0)`,
+         VALUES ($1, 'ajuste', 0, 'Alteração cadastral', $2, NOW(), 'arara', 0, 0)`,
         [id, req.user.id]
       );
     }
 
     await client.query("COMMIT");
-    res.json({ mensagem: "Produto atualizado com sucesso" });
+    res.json({ mensagem: "Sucesso" });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO NO PUT:", err.message);
-    res.status(500).json({ erro: "Erro ao atualizar produto", detalhes: err.message });
+    res.status(500).json({ erro: "Erro no PUT", detalhes: err.message });
   } finally {
     client.release();
   }
@@ -179,22 +178,19 @@ router.get("/", authMiddleware, async (req, res) => {
 
     res.json(rows);
   } catch (err) {
-    console.error("ERRO NO GET /PRODUTOS:", err);
-    res.status(500).json({ erro: "Erro ao buscar produtos" });
+    res.status(500).json({ erro: "Erro ao buscar" });
   }
 });
 
 /* =========================
-   DESATIVAR PRODUTO (DELETE)
+   DELETE
 ========================= */
 router.delete("/:id", authMiddleware, async (req, res) => {
-  const { id } = req.params;
   try {
-    await db.query("UPDATE produtos SET ativo = false WHERE id = $1", [id]);
-    res.json({ message: "Produto desativado com sucesso" });
+    await db.query("UPDATE produtos SET ativo = false WHERE id = $1", [req.params.id]);
+    res.json({ message: "Desativado" });
   } catch (err) {
-    console.error("ERRO NO DELETE /PRODUTOS:", err);
-    res.status(500).json({ erro: "Erro ao remover produto" });
+    res.status(500).json({ erro: "Erro ao remover" });
   }
 });
 
