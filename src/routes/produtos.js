@@ -26,9 +26,8 @@ async function uploadImagem(file) {
   const { data } = supabase.storage.from("produtos").getPublicUrl(filePath);
   return data.publicUrl;
 }
-
 /* =========================
-   CRIAR PRODUTO (POST)
+   CRIAR PRODUTO (POST) - CORRIGIDO
 ========================= */
 router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
   const client = await db.connect();
@@ -48,6 +47,7 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const imagem_url = req.file ? await uploadImagem(req.file) : null;
 
+    // 1. Inserir Produto
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
@@ -60,21 +60,30 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
       
       for (const v of parsedVariantes) {
-        await client.query(
+        // 2. Inserir Variante e PEGAR O ID (RETURNING id)
+        const varResult = await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [produtoId, v.variacao || "", v.tamanho || "", Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [produtoId, v.variacao || "Padrão", v.tamanho || "Único", Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
         );
 
+        const varianteId = varResult.rows[0].id;
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
         
+        // 3. Inserir na Movimentação (Mapeando 'variacao' para a coluna 'cor')
         if (qtdTotal > 0) {
-          // CORREÇÃO: 'entrada' e 'arara' em minúsculo para bater com o banco
           await client.query(
             `INSERT INTO movimentacoes_estoque 
              (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
              VALUES ($1, 'entrada', $2, 'Estoque Inicial', $3, NOW(), 'arara', 0, $2, $4, $5)`,
-            [produtoId, qtdTotal, req.user.id, v.variacao || "", v.tamanho || ""]
+            [produtoId, qtdTotal, req.user.id, v.variacao || "Padrão", v.tamanho || "Único"]
+          );
+
+          // 4. Sincronizar com a tabela 'estoque' (Saldo atual)
+          await client.query(
+            `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [produtoId, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
           );
         }
       }
@@ -92,7 +101,7 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 });
 
 /* =========================
-   ATUALIZAR PRODUTO (PUT)
+   ATUALIZAR PRODUTO (PUT) - CORRIGIDO
 ========================= */
 router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => {
   const { id } = req.params;
@@ -117,20 +126,32 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
 
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
+      
+      // Limpa as tabelas vinculadas para evitar duplicidade no update
       await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
+      await client.query("DELETE FROM estoque WHERE produto_id = $1", [id]);
 
       for (const v of parsedVariantes) {
-        await client.query(
+        // Reinsere as variantes e pega o novo ID
+        const varResult = await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [id, v.variacao || "", v.tamanho || "", Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [id, v.variacao || "Padrão", v.tamanho || "Único", Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
+        );
+
+        const varianteId = varResult.rows[0].id;
+
+        // Reinsere o saldo na tabela estoque
+        await client.query(
+          `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [id, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
         );
       }
 
-      // Ajuste com 'ajuste' e 'arara' em minúsculo
       await client.query(
         `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
-         VALUES ($1, 'ajuste', 0, 'Alteração cadastral', $2, NOW(), 'arara', 0, 0)`,
+         VALUES ($1, 'ajuste', 0, 'Alteração cadastral de variantes', $2, NOW(), 'arara', 0, 0)`,
         [id, req.user.id]
       );
     }
