@@ -36,6 +36,9 @@ async function uploadImagem(file) {
 /* =========================
    CRIAR PRODUTO (POST)
 ========================= */
+/* =========================
+   CRIAR PRODUTO (POST) - AJUSTADO PARA O SEU BANCO
+========================= */
 router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
   const client = await db.connect();
   try {
@@ -43,19 +46,18 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
 
-    // 1. Tratamento de tipos (Evita erro 500 por NaN ou String vazia no SQL)
     const idSub = parseInt(subcategoria_id);
     const pVenda = parseFloat(String(preco_venda).replace(',', '.'));
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(',', '.')) : null;
 
     if (!nome || isNaN(idSub) || isNaN(pVenda)) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ erro: "Campos obrigatórios inválidos: Nome, Preço ou Subcategoria." });
+      return res.status(400).json({ erro: "Dados obrigatórios inválidos." });
     }
 
     const imagem_url = req.file ? await uploadImagem(req.file) : null;
 
-    // 2. Inserção do Produto
+    // 1. Inserir Produto
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
@@ -64,11 +66,12 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const produtoId = produto.rows[0].id;
 
-    // 3. Inserção de Variantes e Estoque Inicial
+    // 2. Inserir Variantes e Movimentação
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
       
       for (const v of parsedVariantes) {
+        // Inserir na tabela produto_variantes
         await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
            VALUES ($1, $2, $3, $4, $5)`,
@@ -78,11 +81,12 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
         
         if (qtdTotal > 0) {
-          // Nota: Certifique-se que sua tabela 'movimentacoes_estoque' tem exatamente essas colunas
+          // AJUSTE AQUI: Incluindo as colunas que seu banco possui (local, anterior, nova, etc)
           await client.query(
-            `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data)
-             VALUES ($1, 'ENTRADA', $2, 'Estoque Inicial (Cadastro)', $3, NOW())`,
-            [produtoId, qtdTotal, req.user.id]
+            `INSERT INTO movimentacoes_estoque 
+             (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
+             VALUES ($1, 'ENTRADA', $2, 'Estoque Inicial', $3, NOW(), 'GERAL', 0, $2, $4, $5)`,
+            [produtoId, qtdTotal, req.user.id, v.variacao || "", v.tamanho || ""]
           );
         }
       }
@@ -92,8 +96,8 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
     res.status(201).json({ id: produtoId });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO CRÍTICO NO POST /PRODUTOS:", err);
-    res.status(500).json({ erro: "Erro interno no servidor", detalhes: err.message });
+    console.error("ERRO NO BANCO:", err.message);
+    res.status(500).json({ erro: "Erro ao salvar", detalhes: err.message });
   } finally {
     client.release();
   }
