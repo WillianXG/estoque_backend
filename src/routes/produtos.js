@@ -8,7 +8,7 @@ import path from "path";
 const router = Router();
 
 /* =========================
-   MULTER (Memória para Upload)
+   MULTER
 ========================= */
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -16,7 +16,7 @@ const upload = multer({
 });
 
 /* =========================
-   UPLOAD SUPABASE (Auxiliar)
+   UPLOAD SUPABASE
 ========================= */
 async function uploadImagem(file) {
   if (!file) return null;
@@ -36,9 +36,6 @@ async function uploadImagem(file) {
 /* =========================
    CRIAR PRODUTO (POST)
 ========================= */
-/* =========================
-   CRIAR PRODUTO (POST) - AJUSTADO PARA O SEU BANCO
-========================= */
 router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
   const client = await db.connect();
   try {
@@ -57,7 +54,6 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const imagem_url = req.file ? await uploadImagem(req.file) : null;
 
-    // 1. Inserir Produto
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
@@ -66,12 +62,10 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const produtoId = produto.rows[0].id;
 
-    // 2. Inserir Variantes e Movimentação
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
       
       for (const v of parsedVariantes) {
-        // Inserir na tabela produto_variantes
         await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
            VALUES ($1, $2, $3, $4, $5)`,
@@ -81,11 +75,10 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
         
         if (qtdTotal > 0) {
-          // AJUSTE AQUI: Incluindo as colunas que seu banco possui (local, anterior, nova, etc)
           await client.query(
             `INSERT INTO movimentacoes_estoque 
              (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
-             VALUES ($1, 'ENTRADA', $2, 'Estoque Inicial', $3, NOW(), 'GERAL', 0, $2, $4, $5)`,
+             VALUES ($1, 'ENTRADA', $2, 'Estoque Inicial', $3, NOW(), 'SISTEMA', 0, $2, $4, $5)`,
             [produtoId, qtdTotal, req.user.id, v.variacao || "", v.tamanho || ""]
           );
         }
@@ -96,7 +89,7 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
     res.status(201).json({ id: produtoId });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO NO BANCO:", err.message);
+    console.error("ERRO NO POST:", err.message);
     res.status(500).json({ erro: "Erro ao salvar", detalhes: err.message });
   } finally {
     client.release();
@@ -104,7 +97,7 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 });
 
 /* =========================
-   ATUALIZAR PRODUTO (PUT)
+   ATUALIZAR PRODUTO (PUT) - CORRIGIDO
 ========================= */
 router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => {
   const { id } = req.params;
@@ -121,7 +114,6 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
     let imagem_url = null;
     if (req.file) imagem_url = await uploadImagem(req.file);
 
-    // Update básico do produto
     await client.query(
       `UPDATE produtos SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
        imagem_url = COALESCE($6, imagem_url) WHERE id=$7`,
@@ -131,7 +123,6 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
       
-      // Sincronização: Deleta variantes antigas e reinsere
       await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
 
       for (const v of parsedVariantes) {
@@ -142,9 +133,11 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
         );
       }
 
+      // CORREÇÃO AQUI: Adicionado colunas faltantes para bater com o banco
       await client.query(
-        `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data)
-         VALUES ($1, 'AJUSTE', 0, 'Alteração via editor', $2, NOW())`,
+        `INSERT INTO movimentacoes_estoque 
+         (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
+         VALUES ($1, 'AJUSTE', 0, 'Alteração via editor', $2, NOW(), 'SISTEMA', 0, 0)`,
         [id, req.user.id]
       );
     }
@@ -153,8 +146,8 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
     res.json({ mensagem: "Produto atualizado com sucesso" });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO NO PUT /PRODUTOS:", err);
-    res.status(500).json({ erro: "Erro ao atualizar produto" });
+    console.error("ERRO NO PUT:", err.message);
+    res.status(500).json({ erro: "Erro ao atualizar produto", detalhes: err.message });
   } finally {
     client.release();
   }
@@ -184,9 +177,17 @@ router.get("/", authMiddleware, async (req, res) => {
       GROUP BY p.id
       ORDER BY p.nome;
     `);
-    res.json(result.rows);
+    
+    // Converte os preços de string para número antes de enviar
+    const rows = result.rows.map(row => ({
+      ...row,
+      preco_venda: parseFloat(row.preco_venda),
+      preco_compra: row.preco_compra ? parseFloat(row.preco_compra) : null
+    }));
+
+    res.json(rows);
   } catch (err) {
-    console.error("ERRO NO GET /PRODUTOS:", err);
+    console.error("ERRO NO GET:", err);
     res.status(500).json({ erro: "Erro ao buscar produtos" });
   }
 });
@@ -200,7 +201,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
     await db.query("UPDATE produtos SET ativo = false WHERE id = $1", [id]);
     res.json({ message: "Produto desativado com sucesso" });
   } catch (err) {
-    console.error("ERRO NO DELETE /PRODUTOS:", err);
+    console.error("ERRO NO DELETE:", err);
     res.status(500).json({ erro: "Erro ao remover produto" });
   }
 });
