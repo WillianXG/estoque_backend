@@ -7,11 +7,13 @@ import path from "path";
 
 const router = Router();
 
+// Configuração do Multer para Upload de Imagens
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
+// Função Auxiliar: Upload para Supabase
 async function uploadImagem(file) {
   if (!file) return null;
   const fileExt = path.extname(file.originalname);
@@ -26,9 +28,10 @@ async function uploadImagem(file) {
   const { data } = supabase.storage.from("produtos").getPublicUrl(filePath);
   return data.publicUrl;
 }
-/* =========================
-   CRIAR PRODUTO (POST) - CORRIGIDO
-========================= */
+
+/* ============================================================
+   CRIAR PRODUTO (POST) - ATUALIZADO (Sincroniza com Estoque)
+============================================================ */
 router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
   const client = await db.connect();
   try {
@@ -47,7 +50,7 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 
     const imagem_url = req.file ? await uploadImagem(req.file) : null;
 
-    // 1. Inserir Produto
+    // 1. Inserir o Produto principal
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
@@ -60,7 +63,7 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
       
       for (const v of parsedVariantes) {
-        // 2. Inserir Variante e PEGAR O ID (RETURNING id)
+        // 2. Inserir Variante e Capturar o ID gerado
         const varResult = await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
            VALUES ($1, $2, $3, $4, $5) RETURNING id`,
@@ -70,20 +73,20 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
         const varianteId = varResult.rows[0].id;
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
         
-        // 3. Inserir na Movimentação (Mapeando 'variacao' para a coluna 'cor')
+        // 3. Inserir na tabela 'estoque' (Fundamental para aparecer no saldo geral)
+        await client.query(
+          `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [produtoId, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
+        );
+
+        // 4. Registrar Movimentação de Estoque Inicial
         if (qtdTotal > 0) {
           await client.query(
             `INSERT INTO movimentacoes_estoque 
              (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
              VALUES ($1, 'entrada', $2, 'Estoque Inicial', $3, NOW(), 'arara', 0, $2, $4, $5)`,
             [produtoId, qtdTotal, req.user.id, v.variacao || "Padrão", v.tamanho || "Único"]
-          );
-
-          // 4. Sincronizar com a tabela 'estoque' (Saldo atual)
-          await client.query(
-            `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [produtoId, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
           );
         }
       }
@@ -100,9 +103,9 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
   }
 });
 
-/* =========================
-   ATUALIZAR PRODUTO (PUT) - CORRIGIDO
-========================= */
+/* ============================================================
+   ATUALIZAR PRODUTO (PUT) - ATUALIZADO (Limpa e Reinsere Saldo)
+============================================================ */
 router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => {
   const { id } = req.params;
   const client = await db.connect();
@@ -127,12 +130,12 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
       
-      // Limpa as tabelas vinculadas para evitar duplicidade no update
+      // Limpa dados antigos para evitar duplicidade ou saldo órfão
       await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
       await client.query("DELETE FROM estoque WHERE produto_id = $1", [id]);
 
       for (const v of parsedVariantes) {
-        // Reinsere as variantes e pega o novo ID
+        // Reinsere a variante e pega o novo ID
         const varResult = await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
            VALUES ($1, $2, $3, $4, $5) RETURNING id`,
@@ -141,7 +144,7 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
 
         const varianteId = varResult.rows[0].id;
 
-        // Reinsere o saldo na tabela estoque
+        // Reinsere o saldo atualizado na tabela estoque
         await client.query(
           `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
            VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -160,15 +163,16 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
     res.json({ mensagem: "Sucesso" });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
+    console.error("ERRO NO PUT:", err.message);
     res.status(500).json({ erro: "Erro no PUT", detalhes: err.message });
   } finally {
     client.release();
   }
 });
 
-/* =========================
+/* ============================================================
    LISTAR PRODUTOS (GET)
-========================= */
+============================================================ */
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const result = await db.query(`
@@ -199,19 +203,21 @@ router.get("/", authMiddleware, async (req, res) => {
 
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ erro: "Erro ao buscar" });
+    console.error("ERRO NO GET:", err.message);
+    res.status(500).json({ erro: "Erro ao buscar produtos" });
   }
 });
 
-/* =========================
-   DELETE
-========================= */
+/* ============================================================
+   DESATIVAR PRODUTO (DELETE)
+============================================================ */
 router.delete("/:id", authMiddleware, async (req, res) => {
   try {
     await db.query("UPDATE produtos SET ativo = false WHERE id = $1", [req.params.id]);
-    res.json({ message: "Desativado" });
+    res.json({ message: "Produto desativado com sucesso" });
   } catch (err) {
-    res.status(500).json({ erro: "Erro ao remover" });
+    console.error("ERRO NO DELETE:", err.message);
+    res.status(500).json({ erro: "Erro ao remover produto" });
   }
 });
 
