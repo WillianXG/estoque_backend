@@ -11,6 +11,7 @@ import vendedorasRoutes from "./routes/vendedoras.js";
 import estoqueRoutes from "./routes/estoque.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import freteRouter from "./routes/frete.js";
+import caixaRouter from "./routes/caixa.js";
 
 const app = express();
 
@@ -33,6 +34,7 @@ app.use("/movimentacoes-estoque", estoqueMovimentacaoRoutes);
 app.use("/vendedoras", vendedorasRoutes);
 app.use("/dashboard", dashboardRoutes);
 app.use("/frete", freteRouter);
+app.use("/caixa", caixaRouter);
 
 /* =========================
    ROTA TESTE
