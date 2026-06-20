@@ -171,6 +171,7 @@ router.get("/historico", authMiddleware, async (req, res) => {
 // ADICIONADO: NOVA ROTA EXCLUSIVA PARA O MODAL
 // 6. BUSCAR MOVIMENTAÇÕES DE UMA SESSÃO (GET /api/caixa/movimentacoes/:idSessao)
 // ==========================================
+// 6. BUSCAR MOVIMENTAÇÕES DE UMA SESSÃO (GET /api/caixa/movimentacoes/:idSessao)
 router.get("/movimentacoes/:idSessao", authMiddleware, async (req, res) => {
     const { idSessao } = req.params;
 
