@@ -4,19 +4,12 @@ import { authMiddleware } from "./auth.js";
 
 const router = Router();
 
-// =========================================================================
-// 1. ABRIR CAIXA (POST /caixa/abrir)
-// =========================================================================
+// 1. ABRIR CAIXA (POST /api/caixa/abrir)
 router.post("/abrir", authMiddleware, async (req, res) => {
     const { valorInicial, idUsuario } = req.body;
 
-    // Validação básica de entrada
-    if (valorInicial === undefined || isNaN(Number(valorInicial))) {
-        return res.status(400).json({ error: "O valor inicial é obrigatório e deve ser um número válido." });
-    }
-
     try {
-        // Verifica se já não existe um caixa aberto no sistema
+        // Verifica se já não existe um caixa aberto
         const caixaAberto = await db.query(
             'SELECT * FROM "CaixaSessao" WHERE "Status" = \'ABERTO\''
         );
@@ -25,48 +18,39 @@ router.post("/abrir", authMiddleware, async (req, res) => {
             return res.status(400).json({ error: "Já existe um caixa aberto no momento!" });
         }
 
-        // Cria a nova sessão de caixa na tabela corrigida do Supabase
+        // Cria a nova sessão de caixa
         const query = `
             INSERT INTO "CaixaSessao" ("ValorInicial", "Status", "IdUsuario") 
             VALUES ($1, 'ABERTO', $2) 
             RETURNING *
         `;
-        const result = await db.query(query, [Number(valorInicial), idUsuario || 1]);
+        const result = await db.query(query, [valorInicial, idUsuario]);
 
         res.status(201).json(result.rows[0]);
     } catch (error) {
-        console.error("Erro crítico na rota POST /caixa/abrir:", error);
-        res.status(500).json({ 
-            error: "Erro interno no servidor ao abrir o caixa.",
-            detalhe: error.message 
-        });
+        console.error(error);
+        res.status(500).json({ error: "Erro ao abrir o caixa." });
     }
 });
 
-// =========================================================================
-// 2. VERIFICAR STATUS ATUAL DO CAIXA (GET /caixa/status)
-// =========================================================================
+// 2. VERIFICAR STATUS ATUAL DO CAIXA (GET /api/caixa/status)
 router.get("/status", authMiddleware, async (req, res) => {
     try {
-        // Busca se tem uma sessão com status 'ABERTO'
+        // Busca se tem caixa aberto e traz os valores consolidados
         const caixaAberto = await db.query(
             'SELECT * FROM "CaixaSessao" WHERE "Status" = \'ABERTO\''
         );
 
-        // Se não houver caixa aberto, avisa o front-end de forma limpa via JSON
         if (caixaAberto.rows.length === 0) {
-            return res.json({ status: "FECHADO", caixa: null, resumo: [] });
+            return res.json({ status: "FECHADO", caixa: null });
         }
 
         const caixa = caixaAberto.rows[0];
-        
-        // Garante a leitura do ID seja em maiúsculo (Id) ou minúsculo (id) pelo driver do pg
-        const sessaoId = caixa.Id !== undefined ? caixa.Id : caixa.id;
 
-        // Busca a soma de movimentações agrupadas por tipo para alimentar os cards do ERP
+        // Busca a soma de movimentações para exibir no painel (Saldo Estimado)
         const movimentacoes = await db.query(
             'SELECT "Tipo", SUM("Valor") as total FROM "CaixaMovimentacao" WHERE "IdSessao" = $1 GROUP BY "Tipo"',
-            [sessaoId]
+            [caixa.Id]
         );
 
         res.json({
@@ -75,93 +59,111 @@ router.get("/status", authMiddleware, async (req, res) => {
             resumo: movimentacoes.rows
         });
     } catch (error) {
-        console.error("Erro crítico na rota GET /caixa/status:", error);
-        res.status(500).json({ 
-            error: "Erro interno no servidor ao buscar status do caixa.", 
-            detalhe: error.message 
-        });
+        console.error(error);
+        res.status(500).json({ error: "Erro ao buscar status do caixa." });
     }
 });
 
-// =========================================================================
-// 3. REALIZAR MOVIMENTAÇÃO: SANGRIA OU SUPRIMENTO (POST /caixa/movimentacao)
-// =========================================================================
+// 3. REALIZAR MOVIMENTAÇÃO: SANGRIA OU SUPRIMENTO (POST /api/caixa/movimentacao)
 router.post("/movimentacao", authMiddleware, async (req, res) => {
     const { idSessao, tipo, valor, observacao } = req.body;
 
-    // Validações de segurança obrigatórias
-    if (!idSessao) {
-        return res.status(400).json({ error: "O ID da sessão do caixa é obrigatório." });
-    }
+    // Validação do tipo correto
     if (!["SANGRIA", "SUPRIMENTO", "VENDA_DINHEIRO"].includes(tipo)) {
-        return res.status(400).json({ error: "Tipo de movimentação inválido. Use SANGRIA, SUPRIMENTO ou VENDA_DINHEIRO." });
-    }
-    if (!valor || isNaN(Number(valor)) || Number(valor) <= 0) {
-        return res.status(400).json({ error: "O valor da movimentação deve ser um número maior que zero." });
+        return res.status(400).json({ error: "Tipo de movimentação inválido." });
     }
 
     try {
-        // Insere a movimentação de entrada ou saída na tabela
         const query = `
             INSERT INTO "CaixaMovimentacao" ("IdSessao", "Tipo", "Valor", "Observacao")
             VALUES ($1, $2, $3, $4)
             RETURNING *
         `;
-        const result = await db.query(query, [
-            idSessao, 
-            tipo, 
-            Number(valor), 
-            observacao || `Movimentação de ${tipo}`
-        ]);
+        const result = await db.query(query, [idSessao, tipo, valor, observacao]);
 
         res.status(201).json(result.rows[0]);
     } catch (error) {
-        console.error("Erro crítico na rota POST /caixa/movimentacao:", error);
-        res.status(500).json({ 
-            error: "Erro interno no servidor ao registrar movimentação.",
-            detalhe: error.message 
-        });
+        console.error(error);
+        res.status(500).json({ error: "Erro ao registrar movimentação." });
     }
 });
 
-// =========================================================================
-// 4. FECHAR CAIXA (POST /caixa/fechar)
-// =========================================================================
+// 4. FECHAR CAIXA (POST /api/caixa/fechar)
 router.post("/fechar", authMiddleware, async (req, res) => {
     const { idSessao, valorFechamentoDinheiro } = req.body;
 
-    if (!idSessao) {
-        return res.status(400).json({ error: "O ID da sessão é obrigatório para realizar o encerramento." });
-    }
-    if (valorFechamentoDinheiro === undefined || isNaN(Number(valorFechamentoDinheiro))) {
-        return res.status(400).json({ error: "Informe o valor total em dinheiro contado na gaveta." });
-    }
-
     try {
-        // Altera o status para FECHADO, salva o valor contado e carimba o timestamp do encerramento
         const query = `
             UPDATE "CaixaSessao" 
             SET "Status" = 'FECHADO', "DataFechamento" = NOW(), "ValorFechamentoDinheiro" = $1
             WHERE "Id" = $2 AND "Status" = 'ABERTO'
             RETURNING *
         `;
-        const result = await db.query(query, [Number(valorFechamentoDinheiro), idSessao]);
+        const result = await db.query(query, [valorFechamentoDinheiro, idSessao]);
 
-        // Se a query retornou 0 linhas alteradas, significa que a sessão já foi fechada ou o ID está errado
         if (result.rows.length === 0) {
-            return res.status(400).json({ error: "Sessão de caixa não encontrada ou já encerrada anteriormente." });
+            return res.status(400).json({ error: "Caixa não encontrado ou já encerrado." });
         }
 
-        res.json({ 
-            message: "Caixa fechado com sucesso!", 
-            caixa: result.rows[0] 
-        });
+        res.json({ message: "Caixa fechado com sucesso!", caixa: result.rows[0] });
     } catch (error) {
-        console.error("Erro crítico na rota POST /caixa/fechar:", error);
-        res.status(500).json({ 
-            error: "Erro interno no servidor ao fechar o caixa.",
-            detalhe: error.message 
+        console.error(error);
+        res.status(500).json({ error: "Erro ao fechar o caixa." });
+    }
+});
+
+// 5. HISTÓRICO DE CAIXAS (GET /api/caixa/historico)
+// Traz as sessões fechadas calculando entradas, saídas e possíveis quebras de caixa
+router.get("/historico", authMiddleware, async (req, res) => {
+    try {
+        const query = `
+            SELECT 
+                s."Id",
+                s."DataAbertura",
+                s."DataFechamento",
+                s."ValorInicial",
+                s."ValorFechamentoDinheiro" AS "ValorInformado",
+                COALESCE(SUM(CASE WHEN m."Tipo" = 'SUPRIMENTO' THEN m."Valor" ELSE 0 END), 0) AS "TotalSuprimentos",
+                COALESCE(SUM(CASE WHEN m."Tipo" = 'SANGRIA' THEN m."Valor" ELSE 0 END), 0) AS "TotalSangrias",
+                COALESCE(SUM(CASE WHEN m."Tipo" = 'VENDA_DINHEIRO' THEN m."Valor" ELSE 0 END), 0) AS "TotalVendas",
+                (
+                    s."ValorInicial" 
+                    + COALESCE(SUM(CASE WHEN m."Tipo" = 'SUPRIMENTO' THEN m."Valor" ELSE 0 END), 0)
+                    + COALESCE(SUM(CASE WHEN m."Tipo" = 'VENDA_DINHEIRO' THEN m."Valor" ELSE 0 END), 0)
+                    - COALESCE(SUM(CASE WHEN m."Tipo" = 'SANGRIA' THEN m."Valor" ELSE 0 END), 0)
+                ) AS "SaldoEstimado"
+            FROM "CaixaSessao" s
+            LEFT JOIN "CaixaMovimentacao" m ON s."Id" = m."IdSessao"
+            WHERE s."Status" = 'FECHADO'
+            GROUP BY s."Id", s."DataAbertura", s."DataFechamento", s."ValorInicial", s."ValorFechamentoDinheiro"
+            ORDER BY s."DataFechamento" DESC
+        `;
+
+        const result = await db.query(query);
+
+        // Processa a diferença para saber se faltou ou sobrou dinheiro na gaveta
+        const historicoFormatado = result.rows.map(caixa => {
+            const saldoEstimado = Number(caixa.SaldoEstimado);
+            const valorInformado = Number(caixa.ValorInformado);
+            const diferenca = valorInformado - saldoEstimado;
+
+            return {
+                ...caixa,
+                ValorInicial: Number(caixa.ValorInicial),
+                ValorInformado: valorInformado,
+                TotalSuprimentos: Number(caixa.TotalSuprimentos),
+                TotalSangrias: Number(caixa.TotalSangrias),
+                TotalVendas: Number(caixa.TotalVendas),
+                SaldoEstimado: saldoEstimado,
+                Diferenca: diferenca, // Negativo indica que faltou dinheiro (Quebra)
+                ResultadoFechamento: diferenca === 0 ? "OK" : diferenca < 0 ? "QUEBRA" : "SOBRA"
+            };
         });
+
+        res.json(historicoFormatado);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Erro ao buscar histórico do caixa." });
     }
 });
 
