@@ -113,7 +113,7 @@ router.post("/fechar", authMiddleware, async (req, res) => {
 });
 
 // 5. HISTÓRICO DE CAIXAS (GET /api/caixa/historico)
-// Traz as sessões fechadas calculando entradas, saídas e possíveis quebras de caixa
+// Traz as sessões fechadas calculando de forma isolada para evitar duplicações por agrupamento
 router.get("/historico", authMiddleware, async (req, res) => {
     try {
         const query = `
@@ -123,19 +123,11 @@ router.get("/historico", authMiddleware, async (req, res) => {
                 s."DataFechamento",
                 s."ValorInicial",
                 s."ValorFechamentoDinheiro" AS "ValorInformado",
-                COALESCE(SUM(CASE WHEN m."Tipo" = 'SUPRIMENTO' THEN m."Valor" ELSE 0 END), 0) AS "TotalSuprimentos",
-                COALESCE(SUM(CASE WHEN m."Tipo" = 'SANGRIA' THEN m."Valor" ELSE 0 END), 0) AS "TotalSangrias",
-                COALESCE(SUM(CASE WHEN m."Tipo" = 'VENDA_DINHEIRO' THEN m."Valor" ELSE 0 END), 0) AS "TotalVendas",
-                (
-                    s."ValorInicial" 
-                    + COALESCE(SUM(CASE WHEN m."Tipo" = 'SUPRIMENTO' THEN m."Valor" ELSE 0 END), 0)
-                    + COALESCE(SUM(CASE WHEN m."Tipo" = 'VENDA_DINHEIRO' THEN m."Valor" ELSE 0 END), 0)
-                    - COALESCE(SUM(CASE WHEN m."Tipo" = 'SANGRIA' THEN m."Valor" ELSE 0 END), 0)
-                ) AS "SaldoEstimado"
+                COALESCE((SELECT SUM("Valor") FROM "CaixaMovimentacao" WHERE "IdSessao" = s."Id" AND "Tipo" = 'SUPRIMENTO'), 0) AS "TotalSuprimentos",
+                COALESCE((SELECT SUM("Valor") FROM "CaixaMovimentacao" WHERE "IdSessao" = s."Id" AND "Tipo" = 'SANGRIA'), 0) AS "TotalSangrias",
+                COALESCE((SELECT SUM("Valor") FROM "CaixaMovimentacao" WHERE "IdSessao" = s."Id" AND "Tipo" = 'VENDA_DINHEIRO'), 0) AS "TotalVendas"
             FROM "CaixaSessao" s
-            LEFT JOIN "CaixaMovimentacao" m ON s."Id" = m."IdSessao"
             WHERE s."Status" = 'FECHADO'
-            GROUP BY s."Id", s."DataAbertura", s."DataFechamento", s."ValorInicial", s."ValorFechamentoDinheiro"
             ORDER BY s."DataFechamento" DESC
         `;
 
@@ -143,19 +135,27 @@ router.get("/historico", authMiddleware, async (req, res) => {
 
         // Processa a diferença para saber se faltou ou sobrou dinheiro na gaveta
         const historicoFormatado = result.rows.map(caixa => {
-            const saldoEstimado = Number(caixa.SaldoEstimado);
+            const valorInicial = Number(caixa.ValorInicial);
+            const totalSuprimentos = Number(caixa.TotalSuprimentos);
+            const totalSangrias = Number(caixa.TotalSangrias);
+            const totalVendas = Number(caixa.TotalVendas);
             const valorInformado = Number(caixa.ValorInformado);
+
+            // Cálculo do Saldo Estimado correto por sessão
+            const saldoEstimado = valorInicial + totalSuprimentos + totalVendas - totalSangrias;
             const diferenca = valorInformado - saldoEstimado;
 
             return {
-                ...caixa,
-                ValorInicial: Number(caixa.ValorInicial),
+                Id: caixa.Id,
+                DataAbertura: caixa.DataAbertura,
+                DataFechamento: caixa.DataFechamento,
+                ValorInicial: valorInicial,
                 ValorInformado: valorInformado,
-                TotalSuprimentos: Number(caixa.TotalSuprimentos),
-                TotalSangrias: Number(caixa.TotalSangrias),
-                TotalVendas: Number(caixa.TotalVendas),
+                TotalSuprimentos: totalSuprimentos,
+                TotalSangrias: totalSangrias,
+                TotalVendas: totalVendas,
                 SaldoEstimado: saldoEstimado,
-                Diferenca: diferenca, // Negativo indica que faltou dinheiro (Quebra)
+                Diferenca: diferenca, 
                 ResultadoFechamento: diferenca === 0 ? "OK" : diferenca < 0 ? "QUEBRA" : "SOBRA"
             };
         });
@@ -164,6 +164,34 @@ router.get("/historico", authMiddleware, async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: "Erro ao buscar histórico do caixa." });
+    }
+});
+
+// ==========================================
+// ADICIONADO: NOVA ROTA EXCLUSIVA PARA O MODAL
+// 6. BUSCAR MOVIMENTAÇÕES DE UMA SESSÃO (GET /api/caixa/movimentacoes/:idSessao)
+// ==========================================
+router.get("/movimentacoes/:idSessao", authMiddleware, async (req, res) => {
+    const { idSessao } = req.params;
+
+    try {
+        const query = `
+            SELECT 
+                "Id", 
+                "Tipo", 
+                "Valor", 
+                "Observacao",
+                "DataCriacao"
+            FROM "CaixaMovimentacao"
+            WHERE "IdSessao" = $1
+            ORDER BY "Id" ASC
+        `;
+        const result = await db.query(query, [idSessao]);
+        
+        res.json(result.rows);
+    } catch (error) {
+        console.error("Erro ao carregar movimentações do modal:", error);
+        res.status(500).json({ error: "Erro ao carregar os detalhes do caixa selecionado." });
     }
 });
 
