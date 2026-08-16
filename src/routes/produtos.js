@@ -7,7 +7,7 @@ import path from "path";
 
 const router = Router();
 
-// Configuração do Multer para Upload de Imagens
+// Configuração do Multer para Upload de Múltiplas Imagens
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },
@@ -17,7 +17,7 @@ const upload = multer({
 async function uploadImagem(file) {
   if (!file) return null;
   const fileExt = path.extname(file.originalname);
-  const fileName = `${Date.now()}${fileExt}`;
+  const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}${fileExt}`;
   const filePath = `produtos/${fileName}`;
 
   const { error } = await supabase.storage
@@ -30,9 +30,9 @@ async function uploadImagem(file) {
 }
 
 /* ============================================================
-   CRIAR PRODUTO (POST) - ATUALIZADO (Sincroniza com Estoque)
+   CRIAR PRODUTO (POST) - Suporta Imagem Principal e Imagem por Variante
 ============================================================ */
-router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
+router.post("/", authMiddleware, upload.any(), async (req, res) => {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
@@ -48,39 +48,58 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
       return res.status(400).json({ erro: "Dados obrigatórios inválidos." });
     }
 
-    const imagem_url = req.file ? await uploadImagem(req.file) : null;
+    // Processa Imagem Principal (file field: 'imagem')
+    const fotoPrincipalFile = req.files?.find((f) => f.fieldname === "imagem");
+    const imagem_url_principal = fotoPrincipalFile ? await uploadImagem(fotoPrincipalFile) : null;
 
     // 1. Inserir o Produto principal
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
-      [nome, pVenda, pCompra, idSub, variacao || "", imagem_url, req.user.id]
+      [nome, pVenda, pCompra, idSub, variacao || "", imagem_url_principal, req.user.id]
     );
 
     const produtoId = produto.rows[0].id;
 
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
-      
-      for (const v of parsedVariantes) {
-        // 2. Inserir Variante e Capturar o ID gerado
+
+      for (let i = 0; i < parsedVariantes.length; i++) {
+        const v = parsedVariantes[i];
+
+        // Procura arquivo enviado para esta variante específica (ex: 'variante_imagem_0') ou usa URL pronta
+        const varFile = req.files?.find((f) => f.fieldname === `variante_imagem_${i}`);
+        let varImagemUrl = v.imagem_url || null;
+
+        if (varFile) {
+          varImagemUrl = await uploadImagem(varFile);
+        }
+
+        // 2. Inserir Variante com imagem_url
         const varResult = await client.query(
-          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
-           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [produtoId, v.variacao || "Padrão", v.tamanho || "Único", Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
+          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+          [
+            produtoId,
+            v.variacao || "Padrão",
+            v.tamanho || "Único",
+            Number(v.quantidade_arara) || 0,
+            Number(v.quantidade_deposito) || 0,
+            varImagemUrl,
+          ]
         );
 
         const varianteId = varResult.rows[0].id;
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
-        
-        // 3. Inserir na tabela 'estoque' (Fundamental para aparecer no saldo geral)
+
+        // 3. Inserir na tabela 'estoque'
         await client.query(
           `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
            VALUES ($1, $2, $3, $4, $5, $6)`,
           [produtoId, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
         );
 
-        // 4. Registrar Movimentação de Estoque Inicial
+        // 4. Registrar Movimentação
         if (qtdTotal > 0) {
           await client.query(
             `INSERT INTO movimentacoes_estoque 
@@ -104,22 +123,22 @@ router.post("/", authMiddleware, upload.single("imagem"), async (req, res) => {
 });
 
 /* ============================================================
-   ATUALIZAR PRODUTO (PUT) - ATUALIZADO (Limpa e Reinsere Saldo)
+   ATUALIZAR PRODUTO (PUT)
 ============================================================ */
-router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => {
+router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
   const { id } = req.params;
   const client = await db.connect();
   try {
     await client.query("BEGIN");
 
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
-    
+
     const idSub = parseInt(subcategoria_id);
     const pVenda = parseFloat(String(preco_venda).replace(',', '.'));
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(',', '.')) : null;
 
-    let imagem_url = null;
-    if (req.file) imagem_url = await uploadImagem(req.file);
+    const fotoPrincipalFile = req.files?.find((f) => f.fieldname === "imagem");
+    let imagem_url = fotoPrincipalFile ? await uploadImagem(fotoPrincipalFile) : null;
 
     await client.query(
       `UPDATE produtos SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
@@ -129,22 +148,35 @@ router.put("/:id", authMiddleware, upload.single("imagem"), async (req, res) => 
 
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
-      
-      // Limpa dados antigos para evitar duplicidade ou saldo órfão
+
       await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
       await client.query("DELETE FROM estoque WHERE produto_id = $1", [id]);
 
-      for (const v of parsedVariantes) {
-        // Reinsere a variante e pega o novo ID
+      for (let i = 0; i < parsedVariantes.length; i++) {
+        const v = parsedVariantes[i];
+
+        const varFile = req.files?.find((f) => f.fieldname === `variante_imagem_${i}`);
+        let varImagemUrl = v.imagem_url || null;
+
+        if (varFile) {
+          varImagemUrl = await uploadImagem(varFile);
+        }
+
         const varResult = await client.query(
-          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito)
-           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [id, v.variacao || "Padrão", v.tamanho || "Único", Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0]
+          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+          [
+            id,
+            v.variacao || "Padrão",
+            v.tamanho || "Único",
+            Number(v.quantidade_arara) || 0,
+            Number(v.quantidade_deposito) || 0,
+            varImagemUrl,
+          ]
         );
 
         const varianteId = varResult.rows[0].id;
 
-        // Reinsere o saldo atualizado na tabela estoque
         await client.query(
           `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
            VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -184,7 +216,8 @@ router.get("/", authMiddleware, async (req, res) => {
             'variacao', v.variacao,
             'tamanho', v.tamanho,
             'quantidade_arara', v.quantidade_arara,
-            'quantidade_deposito', v.quantidade_deposito
+            'quantidade_deposito', v.quantidade_deposito,
+            'imagem_url', v.imagem_url
           )
         ) FILTER (WHERE v.id IS NOT NULL), '[]'
       ) as variantes
@@ -194,11 +227,11 @@ router.get("/", authMiddleware, async (req, res) => {
       GROUP BY p.id
       ORDER BY p.nome;
     `);
-    
-    const rows = result.rows.map(row => ({
+
+    const rows = result.rows.map((row) => ({
       ...row,
       preco_venda: parseFloat(row.preco_venda),
-      preco_compra: row.preco_compra ? parseFloat(row.preco_compra) : null
+      preco_compra: row.preco_compra ? parseFloat(row.preco_compra) : null,
     }));
 
     res.json(rows);
