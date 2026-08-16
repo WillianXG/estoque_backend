@@ -69,7 +69,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
 
         // Procura arquivo enviado para esta variante específica (ex: 'variante_imagem_0') ou usa URL pronta
         const varFile = req.files?.find((f) => f.fieldname === `variante_imagem_${i}`);
-        let varImagemUrl = v.imagem_url || null;
+        let varImagemUrl = v.imagem_url || v.imagem || null;
 
         if (varFile) {
           varImagemUrl = await uploadImagem(varFile);
@@ -123,7 +123,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
 });
 
 /* ============================================================
-   ATUALIZAR PRODUTO (PUT)
+   ATUALIZAR PRODUTO (PUT) - Suporta Atualização de Imagens e Upsert
 ============================================================ */
 router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
   const { id } = req.params;
@@ -137,51 +137,88 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
     const pVenda = parseFloat(String(preco_venda).replace(',', '.'));
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(',', '.')) : null;
 
+    // Foto Principal: se um novo arquivo foi enviado, faz o upload, senão mantém
     const fotoPrincipalFile = req.files?.find((f) => f.fieldname === "imagem");
     let imagem_url = fotoPrincipalFile ? await uploadImagem(fotoPrincipalFile) : null;
 
     await client.query(
-      `UPDATE produtos SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
-       imagem_url = COALESCE($6, imagem_url) WHERE id=$7`,
+      `UPDATE produtos 
+       SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
+           imagem_url = COALESCE($6, imagem_url) 
+       WHERE id=$7`,
       [nome, pVenda, pCompra, idSub, variacao || "", imagem_url, id]
     );
 
     if (variantes) {
       const parsedVariantes = typeof variantes === "string" ? JSON.parse(variantes) : variantes;
 
-      await client.query("DELETE FROM produto_variantes WHERE produto_id = $1", [id]);
-      await client.query("DELETE FROM estoque WHERE produto_id = $1", [id]);
-
       for (let i = 0; i < parsedVariantes.length; i++) {
         const v = parsedVariantes[i];
 
+        // Busca arquivo enviado para esta variante específica (ex: 'variante_imagem_0')
         const varFile = req.files?.find((f) => f.fieldname === `variante_imagem_${i}`);
-        let varImagemUrl = v.imagem_url || null;
+        let varImagemUrl = v.imagem_url || v.imagem || null;
 
         if (varFile) {
           varImagemUrl = await uploadImagem(varFile);
         }
 
-        const varResult = await client.query(
-          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-          [
-            id,
-            v.variacao || "Padrão",
-            v.tamanho || "Único",
-            Number(v.quantidade_arara) || 0,
-            Number(v.quantidade_deposito) || 0,
-            varImagemUrl,
-          ]
-        );
+        let varianteId = v.id;
 
-        const varianteId = varResult.rows[0].id;
+        if (varianteId) {
+          // Atualiza a variante existente (preserva a imagem anterior se nenhuma nova for enviada)
+          await client.query(
+            `UPDATE produto_variantes 
+             SET variacao = $1, tamanho = $2, quantidade_arara = $3, quantidade_deposito = $4,
+                 imagem_url = COALESCE($5, imagem_url)
+             WHERE id = $6 AND produto_id = $7`,
+            [
+              v.variacao || "Padrão",
+              v.tamanho || "Único",
+              Number(v.quantidade_arara) || 0,
+              Number(v.quantidade_deposito) || 0,
+              varImagemUrl,
+              varianteId,
+              id
+            ]
+          );
 
-        await client.query(
-          `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [id, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
-        );
+          // Atualiza dados no estoque associado
+          await client.query(
+            `UPDATE estoque 
+             SET quantidade_arara = $1, quantidade_deposito = $2, cor = $3, tamanho = $4
+             WHERE produto_variacao_id = $5`,
+            [
+              Number(v.quantidade_arara) || 0,
+              Number(v.quantidade_deposito) || 0,
+              v.variacao || "Padrão",
+              v.tamanho || "Único",
+              varianteId
+            ]
+          );
+        } else {
+          // Insere nova variante adicionada durante a edição
+          const varResult = await client.query(
+            `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            [
+              id,
+              v.variacao || "Padrão",
+              v.tamanho || "Único",
+              Number(v.quantidade_arara) || 0,
+              Number(v.quantidade_deposito) || 0,
+              varImagemUrl,
+            ]
+          );
+
+          varianteId = varResult.rows[0].id;
+
+          await client.query(
+            `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [id, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
+          );
+        }
       }
 
       await client.query(
