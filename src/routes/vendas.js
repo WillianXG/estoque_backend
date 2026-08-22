@@ -5,9 +5,8 @@ import { authMiddleware } from "./auth.js";
 const router = Router();
 
 /**
- * 🛒 Finalizar venda
+ * 🛒 Finalizar venda (PDV / Loja Física)
  * POST /vendas
- * Body: { itens: [{produto_id, quantidade, preco}], forma_pagamento, observacoes, canal, local_venda }
  */
 router.post("/", authMiddleware, async (req, res) => {
   const { itens, forma_pagamento, observacoes, canal, local_venda } = req.body;
@@ -25,13 +24,11 @@ router.post("/", authMiddleware, async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // Calcula valor total
     const valorTotal = itens.reduce(
       (sum, item) => sum + Number(item.preco) * Number(item.quantidade),
       0
     );
 
-    // Insere venda
     const vendaRes = await client.query(
       `
       INSERT INTO vendas
@@ -44,9 +41,7 @@ router.post("/", authMiddleware, async (req, res) => {
 
     const vendaId = vendaRes.rows[0].id;
 
-    // Processa cada item da venda
     for (const item of itens) {
-      // Consulta estoque
       const estoqueRes = await client.query(
         `SELECT quantidade_arara, quantidade_deposito FROM estoque WHERE produto_id = $1`,
         [item.produto_id]
@@ -56,7 +51,6 @@ router.post("/", authMiddleware, async (req, res) => {
         throw new Error(`Produto ID ${item.produto_id} sem estoque cadastrado`);
       }
 
-      // Determina de onde retirar estoque
       let local = "arara";
       if (local_venda === "deposito") {
         if (estoqueRes.rows[0].quantidade_deposito < item.quantidade) {
@@ -77,7 +71,6 @@ router.post("/", authMiddleware, async (req, res) => {
         );
       }
 
-      // Registra item da venda
       await client.query(
         `
         INSERT INTO venda_itens
@@ -87,7 +80,6 @@ router.post("/", authMiddleware, async (req, res) => {
         [vendaId, item.produto_id, item.quantidade, item.preco]
       );
 
-      // Movimentação de estoque
       await client.query(
         `
         INSERT INTO movimentacoes_estoque
@@ -110,7 +102,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 /**
- * 📖 Histórico de todas as vendas
+ * 📖 Histórico de vendas do PDV
  * GET /vendas
  */
 router.get("/", authMiddleware, async (req, res) => {
@@ -141,6 +133,90 @@ router.get("/", authMiddleware, async (req, res) => {
     );
 
     res.json(vendasRes.rows);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+/**
+ * 🛍️ Buscar Pedidos On-line
+ * GET /pedidos-online
+ */
+router.get("/pedidos-online", authMiddleware, async (req, res) => {
+  try {
+    const pedidosRes = await db.query(
+      `
+      SELECT 
+        po.id,
+        po.cliente_nome,
+        po.cliente_whatsapp,
+        po.cliente_cpf,
+        po.endereco,
+        po.valor_total,
+        po.forma_pagamento,
+        po.status_pagamento,
+        po.status_pedido,
+        po.created_at,
+        po.observacao,
+        COALESCE(json_agg(
+          json_build_object(
+            'id', poi.id,
+            'produto_id', poi.produto_id,
+            'cor', poi.cor,
+            'tamanho', poi.tamanho,
+            'quantidade', poi.quantidade,
+            'preco_unitario', p.preco,
+            'nome_produto', p.nome
+          )
+        ) FILTER (WHERE poi.id IS NOT NULL), '[]') AS pedidos_online_itens
+      FROM pedidos_online po
+      LEFT JOIN pedidos_online_itens poi ON poi.pedido_online_id = po.id
+      LEFT JOIN produtos p ON p.id = poi.produto_id
+      GROUP BY po.id
+      ORDER BY po.id DESC
+      `
+    );
+
+    res.json(pedidosRes.rows);
+  } catch (err) {
+    console.error("Erro ao buscar pedidos online:", err);
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+/**
+ * 💳 Atualizar Status do Pagamento (Ex: Confirmar PIX)
+ * PATCH /pedidos-online/:id/pagamento
+ */
+router.patch("/pedidos-online/:id/pagamento", authMiddleware, async (req, res) => {
+  const { id } = req.params;
+  const { status_pagamento } = req.body;
+
+  try {
+    await db.query(
+      `UPDATE pedidos_online SET status_pagamento = $1 WHERE id = $2`,
+      [status_pagamento, id]
+    );
+    res.json({ mensagem: "Status de pagamento atualizado com sucesso!" });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+/**
+ * 📦 Atualizar Status do Pedido (Ex: Embalando / Enviado)
+ * PATCH /pedidos-online/:id/status
+ */
+router.patch("/pedidos-online/:id/status", authMiddleware, async (req, res) => {
+  const { id } = req.params;
+  const { status_pedido } = req.body;
+
+  try {
+    await db.query(
+      `UPDATE pedidos_online SET status_pedido = $1 WHERE id = $2`,
+      [status_pedido, id]
+    );
+    res.json({ mensagem: "Status do pedido atualizado com sucesso!" });
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }
