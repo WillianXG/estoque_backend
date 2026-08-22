@@ -146,40 +146,39 @@ router.get("/pedidos-online", authMiddleware, async (req, res) => {
   try {
     const pedidosRes = await db.query(
       `
+      WITH itens_agrupados AS (
+        SELECT 
+          poi.pedido_online_id,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', poi.id,
+                'produto_id', poi.produto_id,
+                'cor', poi.cor,
+                'tamanho', poi.tamanho,
+                'quantidade', poi.quantidade,
+                'preco_unitario', poi.preco_unitario,
+                'nome_produto', p.nome
+              )
+            ), '[]'::json
+          ) AS pedidos_online_itens
+        FROM pedidos_online_itens poi
+        LEFT JOIN produtos p ON p.id = poi.produto_id
+        GROUP BY poi.pedido_online_id
+      )
       SELECT 
-        po.id,
-        po.cliente_nome,
-        po.cliente_cpf,
-        po.cliente_whatsapp,
-        po.tipo_entrega,
-        po.endereco_completo,
-        po.status,
-        po.valor_total,
-        po.mp_payment_id,
-        po.data_criacao,
-        po.data_atualizacao,
-        COALESCE(json_agg(
-          json_build_object(
-            'id', poi.id,
-            'produto_id', poi.produto_id,
-            'cor', poi.cor,
-            'tamanho', poi.tamanho,
-            'quantidade', poi.quantidade,
-            'preco_unitario', poi.preco_unitario,
-            'nome_produto', p.nome
-          )
-        ) FILTER (WHERE poi.id IS NOT NULL), '[]') AS pedidos_online_itens
+        po.*,
+        COALESCE(ia.pedidos_online_itens, '[]'::json) AS pedidos_online_itens
       FROM pedidos_online po
-      LEFT JOIN pedidos_online_itens poi ON poi.pedido_online_id = po.id
-      LEFT JOIN produtos p ON p.id = poi.produto_id
-      GROUP BY po.id
-      ORDER BY po.id DESC
+      LEFT JOIN itens_agrupados ia ON ia.pedido_online_id = po.id
+      ORDER BY po.id DESC;
       `
     );
 
     res.json(pedidosRes.rows);
   } catch (err) {
-    console.error("Erro ao buscar pedidos online:", err);
+    // Exibe o erro exato do PostgreSQL nos logs do Render
+    console.error("❌ ERRO NO BANCO DE DADOS (pedidos-online):", err.message);
     res.status(500).json({ erro: err.message });
   }
 });

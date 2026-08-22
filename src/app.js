@@ -37,10 +37,21 @@ app.use("/frete", freteRouter);
 app.use("/caixa", caixaRouter);
 
 /* =========================
-   ROTA TESTE
+   ROTA TESTE / HEALTHCHECK
 ========================= */
 app.get("/", (req, res) => {
-  res.json({ ok: true });
+  res.json({ status: "online", mensagem: "API Duda Arthou Modas operacional" });
+});
+
+/* =========================
+   TRATAMENTO DE ERROS GLOBAL
+========================= */
+app.use((err, req, res, next) => {
+  console.error("❌ ERRO NÃO TRATADO:", err.stack || err.message);
+  res.status(500).json({
+    erro: "Erro interno no servidor",
+    detalhes: err.message
+  });
 });
 
 export default app;
