@@ -140,7 +140,7 @@ router.get("/", authMiddleware, async (req, res) => {
 
 /**
  * 🛍️ Buscar Pedidos On-line
- * GET /pedidos-online
+ * GET /vendas/pedidos-online
  */
 router.get("/pedidos-online", authMiddleware, async (req, res) => {
   try {
@@ -149,15 +149,15 @@ router.get("/pedidos-online", authMiddleware, async (req, res) => {
       SELECT 
         po.id,
         po.cliente_nome,
-        po.cliente_whatsapp,
         po.cliente_cpf,
-        po.endereco,
+        po.cliente_whatsapp,
+        po.tipo_entrega,
+        po.endereco_completo,
+        po.status,
         po.valor_total,
-        po.forma_pagamento,
-        po.status_pagamento,
-        po.status_pedido,
-        po.created_at,
-        po.observacao,
+        po.mp_payment_id,
+        po.data_criacao,
+        po.data_atualizacao,
         COALESCE(json_agg(
           json_build_object(
             'id', poi.id,
@@ -165,7 +165,7 @@ router.get("/pedidos-online", authMiddleware, async (req, res) => {
             'cor', poi.cor,
             'tamanho', poi.tamanho,
             'quantidade', poi.quantidade,
-            'preco_unitario', p.preco,
+            'preco_unitario', poi.preco_unitario,
             'nome_produto', p.nome
           )
         ) FILTER (WHERE poi.id IS NOT NULL), '[]') AS pedidos_online_itens
@@ -185,39 +185,27 @@ router.get("/pedidos-online", authMiddleware, async (req, res) => {
 });
 
 /**
- * 💳 Atualizar Status do Pagamento (Ex: Confirmar PIX)
- * PATCH /pedidos-online/:id/pagamento
- */
-router.patch("/pedidos-online/:id/pagamento", authMiddleware, async (req, res) => {
-  const { id } = req.params;
-  const { status_pagamento } = req.body;
-
-  try {
-    await db.query(
-      `UPDATE pedidos_online SET status_pagamento = $1 WHERE id = $2`,
-      [status_pagamento, id]
-    );
-    res.json({ mensagem: "Status de pagamento atualizado com sucesso!" });
-  } catch (err) {
-    res.status(500).json({ erro: err.message });
-  }
-});
-
-/**
- * 📦 Atualizar Status do Pedido (Ex: Embalando / Enviado)
- * PATCH /pedidos-online/:id/status
+ * 📦 Atualizar Status do Pedido (Ex: AGUARDANDO_PIX, PAGO, EMBALANDO, ENVIADO, CANCELADO)
+ * PATCH /vendas/pedidos-online/:id/status
  */
 router.patch("/pedidos-online/:id/status", authMiddleware, async (req, res) => {
   const { id } = req.params;
-  const { status_pedido } = req.body;
+  const { status } = req.body;
+
+  if (!status) {
+    return res.status(400).json({ erro: "O campo status é obrigatório." });
+  }
 
   try {
     await db.query(
-      `UPDATE pedidos_online SET status_pedido = $1 WHERE id = $2`,
-      [status_pedido, id]
+      `UPDATE pedidos_online 
+       SET status = $1, data_atualizacao = NOW() 
+       WHERE id = $2`,
+      [status, id]
     );
     res.json({ mensagem: "Status do pedido atualizado com sucesso!" });
   } catch (err) {
+    console.error("Erro ao atualizar status:", err);
     res.status(500).json({ erro: err.message });
   }
 });
