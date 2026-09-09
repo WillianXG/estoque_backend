@@ -13,7 +13,7 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-// Função Auxiliar: Upload para Supabase
+// Função Auxiliar: Upload para Supabase com Tratamento Seguro
 async function uploadImagem(file) {
   if (!file) return null;
   const fileExt = path.extname(file.originalname);
@@ -24,7 +24,11 @@ async function uploadImagem(file) {
     .from("produtos")
     .upload(filePath, file.buffer, { contentType: file.mimetype });
 
-  if (error) throw error;
+  if (error) {
+    console.error(`Erro no upload Supabase (${file.originalname}):`, error.message);
+    throw error;
+  }
+
   const { data } = supabase.storage.from("produtos").getPublicUrl(filePath);
   return data.publicUrl;
 }
@@ -55,22 +59,30 @@ router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, re
       return res.status(400).json({ erro: "Subcategoria e Preço de Venda são obrigatórios." });
     }
 
+    // Garante extração correta do ID do usuário logado
+    const usuarioId = req.user?.id || req.user?.usuario_id || null;
+
     const produtosCriados = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
 
       // 1. Upload da imagem no Supabase
-      const imagemUrl = await uploadImagem(file);
+      let imagemUrl = "";
+      try {
+        imagemUrl = await uploadImagem(file);
+      } catch (errUpload) {
+        console.error(`Falha ao carregar imagem no lote (${file.originalname}):`, errUpload);
+        throw new Error(`Erro no upload da imagem "${file.originalname}": ${errUpload.message}`);
+      }
 
-      // Nome genérico ou string vazia caso o banco exija NOT NULL (ajuste se seu campo aceitar NULL)
-      const nomeProduto = "Produto sem nome"; 
+      const nomeProduto = "Produto sem nome";
 
       // 2. Inserir Produto Principal
       const prodRes = await client.query(
         `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
-        [nomeProduto, pVenda, pCompra, idSub, "", imagemUrl, req.user.id]
+        [nomeProduto, pVenda, pCompra, idSub, "Padrão", imagemUrl || "", usuarioId]
       );
 
       const produtoId = prodRes.rows[0].id;
@@ -79,7 +91,7 @@ router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, re
       const varRes = await client.query(
         `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
          VALUES ($1, 'Padrão', 'Único', 1, 0, $2) RETURNING id`,
-        [produtoId, imagemUrl]
+        [produtoId, imagemUrl || ""]
       );
 
       const varianteId = varRes.rows[0].id;
@@ -96,7 +108,7 @@ router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, re
         `INSERT INTO movimentacoes_estoque 
          (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
          VALUES ($1, 'entrada', 1, 'Cadastro em Lote', $2, NOW(), 'arara', 0, 1, 'Padrão', 'Único')`,
-        [produtoId, req.user.id]
+        [produtoId, usuarioId]
       );
 
       produtosCriados.push(produtoId);
@@ -109,8 +121,11 @@ router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, re
     });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO NO POST /lote:", err.message);
-    res.status(500).json({ erro: "Erro ao cadastrar lote", detalhes: err.message });
+    console.error("ERRO NO POST /lote:", err);
+    res.status(500).json({ 
+      erro: "Erro ao cadastrar lote de produtos", 
+      detalhes: err.message || "Erro interno do servidor" 
+    });
   } finally {
     client.release();
   }
@@ -130,8 +145,8 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
     const pVenda = parseFloat(String(preco_venda).replace(",", "."));
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(",", ".")) : null;
 
-    // Se não vier nome, define um nome padrão/genérico
     const nomeFinal = nome?.trim() ? nome : "Produto sem nome";
+    const usuarioId = req.user?.id || req.user?.usuario_id || null;
 
     if (isNaN(idSub) || isNaN(pVenda)) {
       await client.query("ROLLBACK");
@@ -146,7 +161,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
-      [nomeFinal, pVenda, pCompra, idSub, variacao || "", imagem_url_principal, req.user.id]
+      [nomeFinal, pVenda, pCompra, idSub, variacao || "", imagem_url_principal, usuarioId]
     );
 
     const produtoId = produto.rows[0].id;
@@ -194,7 +209,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
             `INSERT INTO movimentacoes_estoque 
              (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
              VALUES ($1, 'entrada', $2, 'Estoque Inicial', $3, NOW(), 'arara', 0, $2, $4, $5)`,
-            [produtoId, qtdTotal, req.user.id, v.variacao || "Padrão", v.tamanho || "Único"]
+            [produtoId, qtdTotal, usuarioId, v.variacao || "Padrão", v.tamanho || "Único"]
           );
         }
       }
@@ -205,7 +220,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
   } catch (err) {
     if (client) await client.query("ROLLBACK");
     console.error("ERRO NO POST:", err.message);
-    res.status(500).json({ erro: "Erro ao salvar", detalhes: err.message });
+    res.status(500).json({ erro: "Erro ao salvar produto", detalhes: err.message });
   } finally {
     client.release();
   }
@@ -221,6 +236,7 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
     await client.query("BEGIN");
 
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
+    const usuarioId = req.user?.id || req.user?.usuario_id || null;
 
     const idSub = parseInt(subcategoria_id);
     const pVenda = parseFloat(String(preco_venda).replace(",", "."));
@@ -309,7 +325,7 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
       await client.query(
         `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
          VALUES ($1, 'ajuste', 0, 'Alteração cadastral de variantes', $2, NOW(), 'arara', 0, 0)`,
-        [id, req.user.id]
+        [id, usuarioId]
       );
     }
 
