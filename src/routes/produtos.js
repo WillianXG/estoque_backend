@@ -10,23 +10,26 @@ const router = Router();
 // Configuração do Multer para Upload de Múltiplas Imagens
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 },
+  limits: { fileSize: 15 * 1024 * 1024 }, // Limitado a 15MB por arquivo
 });
 
 // Função Auxiliar: Upload para Supabase com Tratamento Seguro
 async function uploadImagem(file) {
   if (!file) return null;
-  const fileExt = path.extname(file.originalname);
+  const fileExt = path.extname(file.originalname) || ".jpg";
   const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}${fileExt}`;
   const filePath = `produtos/${fileName}`;
 
   const { error } = await supabase.storage
     .from("produtos")
-    .upload(filePath, file.buffer, { contentType: file.mimetype });
+    .upload(filePath, file.buffer, { 
+      contentType: file.mimetype || "image/jpeg",
+      upsert: true 
+    });
 
   if (error) {
     console.error(`Erro no upload Supabase (${file.originalname}):`, error.message);
-    throw error;
+    throw new Error(`Erro Supabase: ${error.message}`);
   }
 
   const { data } = supabase.storage.from("produtos").getPublicUrl(filePath);
@@ -34,19 +37,15 @@ async function uploadImagem(file) {
 }
 
 /* ============================================================
-   CADASTRO EM LOTE (POST /lote) - SEM NOME
-   Cadastra produtos apenas com Imagem, Preço e Subcategoria
+   CADASTRO EM LOTE (POST /lote) - OTIMIZADO & SEGURO
 ============================================================ */
-router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, res) => {
+router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, res) => {
   const client = await db.connect();
   try {
-    await client.query("BEGIN");
-
     const { subcategoria_id, preco_venda, preco_compra } = req.body;
     const files = req.files;
 
     if (!files || files.length === 0) {
-      await client.query("ROLLBACK");
       return res.status(400).json({ erro: "Nenhuma imagem foi enviada." });
     }
 
@@ -55,55 +54,58 @@ router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, re
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(",", ".")) : null;
 
     if (isNaN(idSub) || isNaN(pVenda)) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ erro: "Subcategoria e Preço de Venda são obrigatórios." });
+      return res.status(400).json({ erro: "Subcategoria e Preço de Venda são obrigatórios e devem ser números válidos." });
     }
 
-    // Garante extração correta do ID do usuário logado
-    const usuarioId = req.user?.id || req.user?.usuario_id || null;
+    // Extração robusta do ID do usuário para evitar erro de FK
+    const usuarioId = req.user?.id || req.user?.usuario_id || req.user?.userId || null;
 
+    // 1. Upload das imagens em PARALELO no Supabase (evita timeout na Render)
+    const imagensUrls = await Promise.all(
+      files.map(async (file) => {
+        try {
+          return await uploadImagem(file);
+        } catch (err) {
+          console.error(`Erro ao subir arquivo ${file.originalname}:`, err);
+          return ""; // Mantém string vazia em caso de falha pontual
+        }
+      })
+    );
+
+    // 2. Transação única para gravação em massa no banco de dados
+    await client.query("BEGIN");
     const produtosCriados = [];
 
     for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-
-      // 1. Upload da imagem no Supabase
-      let imagemUrl = "";
-      try {
-        imagemUrl = await uploadImagem(file);
-      } catch (errUpload) {
-        console.error(`Falha ao carregar imagem no lote (${file.originalname}):`, errUpload);
-        throw new Error(`Erro no upload da imagem "${file.originalname}": ${errUpload.message}`);
-      }
-
+      const imagemUrl = imagensUrls[i] || "";
       const nomeProduto = "Produto sem nome";
 
-      // 2. Inserir Produto Principal
+      // Insert Produto
       const prodRes = await client.query(
         `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
-        [nomeProduto, pVenda, pCompra, idSub, "Padrão", imagemUrl || "", usuarioId]
+        [nomeProduto, pVenda, pCompra, idSub, "Padrão", imagemUrl, usuarioId]
       );
 
       const produtoId = prodRes.rows[0].id;
 
-      // 3. Inserir Variante Padrão
+      // Insert Variante
       const varRes = await client.query(
         `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
          VALUES ($1, 'Padrão', 'Único', 1, 0, $2) RETURNING id`,
-        [produtoId, imagemUrl || ""]
+        [produtoId, imagemUrl]
       );
 
       const varianteId = varRes.rows[0].id;
 
-      // 4. Inserir no Estoque (1 unidade na arara como padrão)
+      // Insert Estoque
       await client.query(
         `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
          VALUES ($1, $2, 1, 0, 'Padrão', 'Único')`,
         [produtoId, varianteId]
       );
 
-      // 5. Movimentação de Estoque Inicial
+      // Insert Movimentação de Estoque
       await client.query(
         `INSERT INTO movimentacoes_estoque 
          (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
@@ -115,14 +117,15 @@ router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, re
     }
 
     await client.query("COMMIT");
-    res.status(201).json({
+
+    return res.status(201).json({
       mensagem: `${produtosCriados.length} produtos cadastrados com sucesso!`,
       ids: produtosCriados,
     });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO NO POST /lote:", err);
-    res.status(500).json({ 
+    console.error("ERRO CRÍTICO NO POST /lote:", err);
+    return res.status(500).json({ 
       erro: "Erro ao cadastrar lote de produtos", 
       detalhes: err.message || "Erro interno do servidor" 
     });
@@ -132,7 +135,7 @@ router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, re
 });
 
 /* ============================================================
-   CRIAR PRODUTO INDIVIDUAL (POST) - Nome Opcional
+   CRIAR PRODUTO INDIVIDUAL (POST)
 ============================================================ */
 router.post("/", authMiddleware, upload.any(), async (req, res) => {
   const client = await db.connect();
@@ -146,18 +149,16 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(",", ".")) : null;
 
     const nomeFinal = nome?.trim() ? nome : "Produto sem nome";
-    const usuarioId = req.user?.id || req.user?.usuario_id || null;
+    const usuarioId = req.user?.id || req.user?.usuario_id || req.user?.userId || null;
 
     if (isNaN(idSub) || isNaN(pVenda)) {
       await client.query("ROLLBACK");
       return res.status(400).json({ erro: "Subcategoria e Preço de Venda são obrigatórios." });
     }
 
-    // Processa Imagem Principal (file field: 'imagem')
     const fotoPrincipalFile = req.files?.find((f) => f.fieldname === "imagem");
     const imagem_url_principal = fotoPrincipalFile ? await uploadImagem(fotoPrincipalFile) : null;
 
-    // 1. Inserir o Produto principal
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
@@ -179,7 +180,6 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
           varImagemUrl = await uploadImagem(varFile);
         }
 
-        // 2. Inserir Variante
         const varResult = await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
@@ -196,14 +196,12 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
         const varianteId = varResult.rows[0].id;
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
 
-        // 3. Inserir no Estoque
         await client.query(
           `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
            VALUES ($1, $2, $3, $4, $5, $6)`,
           [produtoId, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
         );
 
-        // 4. Registrar Movimentação
         if (qtdTotal > 0) {
           await client.query(
             `INSERT INTO movimentacoes_estoque 
@@ -216,11 +214,11 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
     }
 
     await client.query("COMMIT");
-    res.status(201).json({ id: produtoId });
+    return res.status(201).json({ id: produtoId });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
-    console.error("ERRO NO POST:", err.message);
-    res.status(500).json({ erro: "Erro ao salvar produto", detalhes: err.message });
+    console.error("ERRO NO POST INDIVIDUAL:", err.message);
+    return res.status(500).json({ erro: "Erro ao salvar produto", detalhes: err.message });
   } finally {
     client.release();
   }
@@ -236,7 +234,7 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
     await client.query("BEGIN");
 
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
-    const usuarioId = req.user?.id || req.user?.usuario_id || null;
+    const usuarioId = req.user?.id || req.user?.usuario_id || req.user?.userId || null;
 
     const idSub = parseInt(subcategoria_id);
     const pVenda = parseFloat(String(preco_venda).replace(",", "."));
@@ -330,11 +328,11 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
     }
 
     await client.query("COMMIT");
-    res.json({ mensagem: "Sucesso" });
+    return res.json({ mensagem: "Sucesso" });
   } catch (err) {
     if (client) await client.query("ROLLBACK");
     console.error("ERRO NO PUT:", err.message);
-    res.status(500).json({ erro: "Erro no PUT", detalhes: err.message });
+    return res.status(500).json({ erro: "Erro no PUT", detalhes: err.message });
   } finally {
     client.release();
   }
@@ -372,10 +370,10 @@ router.get("/", authMiddleware, async (req, res) => {
       preco_compra: row.preco_compra ? parseFloat(row.preco_compra) : null,
     }));
 
-    res.json(rows);
+    return res.json(rows);
   } catch (err) {
     console.error("ERRO NO GET:", err.message);
-    res.status(500).json({ erro: "Erro ao buscar produtos" });
+    return res.status(500).json({ erro: "Erro ao buscar produtos" });
   }
 });
 
@@ -385,10 +383,10 @@ router.get("/", authMiddleware, async (req, res) => {
 router.delete("/:id", authMiddleware, async (req, res) => {
   try {
     await db.query("UPDATE produtos SET ativo = false WHERE id = $1", [req.params.id]);
-    res.json({ message: "Produto desativado com sucesso" });
+    return res.json({ message: "Produto desativado com sucesso" });
   } catch (err) {
     console.error("ERRO NO DELETE:", err.message);
-    res.status(500).json({ erro: "Erro ao remover produto" });
+    return res.status(500).json({ erro: "Erro ao remover produto" });
   }
 });
 
