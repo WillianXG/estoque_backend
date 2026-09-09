@@ -30,7 +30,94 @@ async function uploadImagem(file) {
 }
 
 /* ============================================================
-   CRIAR PRODUTO (POST) - Suporta Imagem Principal e Imagem por Variante
+   CADASTRO EM LOTE (POST /lote) - SEM NOME
+   Cadastra produtos apenas com Imagem, Preço e Subcategoria
+============================================================ */
+router.post("/lote", authMiddleware, upload.array("imagens", 50), async (req, res) => {
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { subcategoria_id, preco_venda, preco_compra } = req.body;
+    const files = req.files;
+
+    if (!files || files.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ erro: "Nenhuma imagem foi enviada." });
+    }
+
+    const idSub = parseInt(subcategoria_id);
+    const pVenda = parseFloat(String(preco_venda).replace(",", "."));
+    const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(",", ".")) : null;
+
+    if (isNaN(idSub) || isNaN(pVenda)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ erro: "Subcategoria e Preço de Venda são obrigatórios." });
+    }
+
+    const produtosCriados = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+
+      // 1. Upload da imagem no Supabase
+      const imagemUrl = await uploadImagem(file);
+
+      // Nome genérico ou string vazia caso o banco exija NOT NULL (ajuste se seu campo aceitar NULL)
+      const nomeProduto = "Produto sem nome"; 
+
+      // 2. Inserir Produto Principal
+      const prodRes = await client.query(
+        `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
+        [nomeProduto, pVenda, pCompra, idSub, "", imagemUrl, req.user.id]
+      );
+
+      const produtoId = prodRes.rows[0].id;
+
+      // 3. Inserir Variante Padrão
+      const varRes = await client.query(
+        `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
+         VALUES ($1, 'Padrão', 'Único', 1, 0, $2) RETURNING id`,
+        [produtoId, imagemUrl]
+      );
+
+      const varianteId = varRes.rows[0].id;
+
+      // 4. Inserir no Estoque (1 unidade na arara como padrão)
+      await client.query(
+        `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
+         VALUES ($1, $2, 1, 0, 'Padrão', 'Único')`,
+        [produtoId, varianteId]
+      );
+
+      // 5. Movimentação de Estoque Inicial
+      await client.query(
+        `INSERT INTO movimentacoes_estoque 
+         (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
+         VALUES ($1, 'entrada', 1, 'Cadastro em Lote', $2, NOW(), 'arara', 0, 1, 'Padrão', 'Único')`,
+        [produtoId, req.user.id]
+      );
+
+      produtosCriados.push(produtoId);
+    }
+
+    await client.query("COMMIT");
+    res.status(201).json({
+      mensagem: `${produtosCriados.length} produtos cadastrados com sucesso!`,
+      ids: produtosCriados,
+    });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK");
+    console.error("ERRO NO POST /lote:", err.message);
+    res.status(500).json({ erro: "Erro ao cadastrar lote", detalhes: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/* ============================================================
+   CRIAR PRODUTO INDIVIDUAL (POST) - Nome Opcional
 ============================================================ */
 router.post("/", authMiddleware, upload.any(), async (req, res) => {
   const client = await db.connect();
@@ -40,12 +127,15 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
 
     const idSub = parseInt(subcategoria_id);
-    const pVenda = parseFloat(String(preco_venda).replace(',', '.'));
-    const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(',', '.')) : null;
+    const pVenda = parseFloat(String(preco_venda).replace(",", "."));
+    const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(",", ".")) : null;
 
-    if (!nome || isNaN(idSub) || isNaN(pVenda)) {
+    // Se não vier nome, define um nome padrão/genérico
+    const nomeFinal = nome?.trim() ? nome : "Produto sem nome";
+
+    if (isNaN(idSub) || isNaN(pVenda)) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ erro: "Dados obrigatórios inválidos." });
+      return res.status(400).json({ erro: "Subcategoria e Preço de Venda são obrigatórios." });
     }
 
     // Processa Imagem Principal (file field: 'imagem')
@@ -56,7 +146,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
     const produto = await client.query(
       `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
-      [nome, pVenda, pCompra, idSub, variacao || "", imagem_url_principal, req.user.id]
+      [nomeFinal, pVenda, pCompra, idSub, variacao || "", imagem_url_principal, req.user.id]
     );
 
     const produtoId = produto.rows[0].id;
@@ -67,7 +157,6 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
       for (let i = 0; i < parsedVariantes.length; i++) {
         const v = parsedVariantes[i];
 
-        // Procura arquivo enviado para esta variante específica (ex: 'variante_imagem_0') ou usa URL pronta
         const varFile = req.files?.find((f) => f.fieldname === `variante_imagem_${i}`);
         let varImagemUrl = v.imagem_url || v.imagem || null;
 
@@ -75,7 +164,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
           varImagemUrl = await uploadImagem(varFile);
         }
 
-        // 2. Inserir Variante com imagem_url
+        // 2. Inserir Variante
         const varResult = await client.query(
           `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
@@ -92,7 +181,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
         const varianteId = varResult.rows[0].id;
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
 
-        // 3. Inserir na tabela 'estoque'
+        // 3. Inserir no Estoque
         await client.query(
           `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
            VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -123,7 +212,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
 });
 
 /* ============================================================
-   ATUALIZAR PRODUTO (PUT) - Suporta Atualização de Imagens e Upsert
+   ATUALIZAR PRODUTO (PUT)
 ============================================================ */
 router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
   const { id } = req.params;
@@ -134,19 +223,19 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
 
     const idSub = parseInt(subcategoria_id);
-    const pVenda = parseFloat(String(preco_venda).replace(',', '.'));
-    const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(',', '.')) : null;
+    const pVenda = parseFloat(String(preco_venda).replace(",", "."));
+    const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(",", ".")) : null;
 
-    // Foto Principal: se um novo arquivo foi enviado, faz o upload, senão mantém
     const fotoPrincipalFile = req.files?.find((f) => f.fieldname === "imagem");
     let imagem_url = fotoPrincipalFile ? await uploadImagem(fotoPrincipalFile) : null;
 
     await client.query(
       `UPDATE produtos 
-       SET nome=$1, preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
+       SET nome = COALESCE(NULLIF($1, ''), nome), 
+           preco_venda=$2, preco_compra=$3, subcategoria_id=$4, variacao=$5, 
            imagem_url = COALESCE($6, imagem_url) 
        WHERE id=$7`,
-      [nome, pVenda, pCompra, idSub, variacao || "", imagem_url, id]
+      [nome || "", pVenda, pCompra, idSub, variacao || "", imagem_url, id]
     );
 
     if (variantes) {
@@ -155,7 +244,6 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
       for (let i = 0; i < parsedVariantes.length; i++) {
         const v = parsedVariantes[i];
 
-        // Busca arquivo enviado para esta variante específica (ex: 'variante_imagem_0')
         const varFile = req.files?.find((f) => f.fieldname === `variante_imagem_${i}`);
         let varImagemUrl = v.imagem_url || v.imagem || null;
 
@@ -166,7 +254,6 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
         let varianteId = v.id;
 
         if (varianteId) {
-          // Atualiza a variante existente (preserva a imagem anterior se nenhuma nova for enviada)
           await client.query(
             `UPDATE produto_variantes 
              SET variacao = $1, tamanho = $2, quantidade_arara = $3, quantidade_deposito = $4,
@@ -179,11 +266,10 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
               Number(v.quantidade_deposito) || 0,
               varImagemUrl,
               varianteId,
-              id
+              id,
             ]
           );
 
-          // Atualiza dados no estoque associado
           await client.query(
             `UPDATE estoque 
              SET quantidade_arara = $1, quantidade_deposito = $2, cor = $3, tamanho = $4
@@ -193,11 +279,10 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
               Number(v.quantidade_deposito) || 0,
               v.variacao || "Padrão",
               v.tamanho || "Único",
-              varianteId
+              varianteId,
             ]
           );
         } else {
-          // Insere nova variante adicionada durante a edição
           const varResult = await client.query(
             `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
              VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
@@ -262,7 +347,7 @@ router.get("/", authMiddleware, async (req, res) => {
       LEFT JOIN produto_variantes v ON v.produto_id = p.id
       WHERE p.ativo = true
       GROUP BY p.id
-      ORDER BY p.nome;
+      ORDER BY p.id DESC;
     `);
 
     const rows = result.rows.map((row) => ({
