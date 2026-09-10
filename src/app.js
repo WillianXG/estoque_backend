@@ -12,7 +12,6 @@ import estoqueRoutes from "./routes/estoque.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import freteRouter from "./routes/frete.js";
 import caixaRouter from "./routes/caixa.js";
-import loteRouter from "./routes/lote.js";
 
 const app = express();
 
