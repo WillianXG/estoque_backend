@@ -1,7 +1,17 @@
+import { Router } from "express";
+import db from "../db.js";
+import { authMiddleware } from "./auth.js";
+import multer from "multer";
+import { uploadImagem } from "../services/storage.js"; // Ou a sua função de upload
+
+const upload = multer({ storage: multer.memoryStorage() });
+const router = Router();
+
 /* ============================================================
-   CADASTRO EM LOTE (POST /produtos/lote)
+   CADASTRO EM LOTE
+   Atende a requisição em POST na raiz do roteador de lote
 ============================================================ */
-router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, res) => {
+router.post("/", authMiddleware, upload.array("imagens", 100), async (req, res) => {
   const client = await db.connect();
   try {
     const { subcategoria_id, preco_venda, preco_compra } = req.body;
@@ -100,3 +110,5 @@ router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, r
     client.release();
   }
 });
+
+export default router;
