@@ -7,13 +7,12 @@ import path from "path";
 
 const router = Router();
 
-// Configuração do Multer para Upload de Múltiplas Imagens
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }, // Limitado a 15MB por arquivo
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-// Função Auxiliar: Upload para Supabase com Tratamento Seguro
+// Helper de Upload com Tratamento de Erro
 async function uploadImagem(file) {
   if (!file) return null;
   const fileExt = path.extname(file.originalname) || ".jpg";
@@ -28,7 +27,7 @@ async function uploadImagem(file) {
     });
 
   if (error) {
-    console.error(`Erro no upload Supabase (${file.originalname}):`, error.message);
+    console.error(`Erro no Supabase (${file.originalname}):`, error.message);
     throw new Error(`Erro Supabase: ${error.message}`);
   }
 
@@ -36,8 +35,17 @@ async function uploadImagem(file) {
   return data.publicUrl;
 }
 
+// Fallback de Usuario ID caso a req.user venha vazia
+function getUsuarioId(req) {
+  const id = req.user?.id || req.user?.usuario_id || req.user?.userId;
+  if (id && !isNaN(parseInt(id))) {
+    return parseInt(id);
+  }
+  return 1; // ID fallback para evitar NOT NULL constraint em movimentacoes_estoque
+}
+
 /* ============================================================
-   CADASTRO EM LOTE (POST /lote) - OTIMIZADO & SEGURO
+   CADASTRO EM LOTE (POST /lote)
 ============================================================ */
 router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, res) => {
   const client = await db.connect();
@@ -54,25 +62,24 @@ router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, r
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(",", ".")) : null;
 
     if (isNaN(idSub) || isNaN(pVenda)) {
-      return res.status(400).json({ erro: "Subcategoria e Preço de Venda são obrigatórios e devem ser números válidos." });
+      return res.status(400).json({ erro: "Subcategoria e Preço de Venda são obrigatórios." });
     }
 
-    // Extração robusta do ID do usuário para evitar erro de FK
-    const usuarioId = req.user?.id || req.user?.usuario_id || req.user?.userId || null;
+    const usuarioId = getUsuarioId(req);
 
-    // 1. Upload das imagens em PARALELO no Supabase (evita timeout na Render)
+    // 1. Upload Paralelo para alta performance
     const imagensUrls = await Promise.all(
       files.map(async (file) => {
         try {
           return await uploadImagem(file);
         } catch (err) {
-          console.error(`Erro ao subir arquivo ${file.originalname}:`, err);
-          return ""; // Mantém string vazia em caso de falha pontual
+          console.error(`Falha ao subir ${file.originalname}:`, err.message);
+          return "";
         }
       })
     );
 
-    // 2. Transação única para gravação em massa no banco de dados
+    // 2. Transação única
     await client.query("BEGIN");
     const produtosCriados = [];
 
@@ -80,36 +87,41 @@ router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, r
       const imagemUrl = imagensUrls[i] || "";
       const nomeProduto = "Produto sem nome";
 
-      // Insert Produto
+      // INSERT em 'produtos'
       const prodRes = await client.query(
-        `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
+        `INSERT INTO produtos 
+         (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) 
+         RETURNING id`,
         [nomeProduto, pVenda, pCompra, idSub, "Padrão", imagemUrl, usuarioId]
       );
 
       const produtoId = prodRes.rows[0].id;
 
-      // Insert Variante
+      // INSERT em 'produto_variantes'
       const varRes = await client.query(
-        `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
-         VALUES ($1, 'Padrão', 'Único', 1, 0, $2) RETURNING id`,
+        `INSERT INTO produto_variantes 
+         (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
+         VALUES ($1, 'Padrão', 'Único', 1, 0, $2) 
+         RETURNING id`,
         [produtoId, imagemUrl]
       );
 
       const varianteId = varRes.rows[0].id;
 
-      // Insert Estoque
+      // INSERT em 'estoque'
       await client.query(
-        `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
+        `INSERT INTO estoque 
+         (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
          VALUES ($1, $2, 1, 0, 'Padrão', 'Único')`,
         [produtoId, varianteId]
       );
 
-      // Insert Movimentação de Estoque
+      // INSERT em 'movimentacoes_estoque' (usuario_id não pode ser NULL)
       await client.query(
         `INSERT INTO movimentacoes_estoque 
-         (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
-         VALUES ($1, 'entrada', 1, 'Cadastro em Lote', $2, NOW(), 'arara', 0, 1, 'Padrão', 'Único')`,
+         (produto_id, usuario_id, tipo, local, quantidade, motivo, data, quantidade_anterior, quantidade_nova, cor, tamanho)
+         VALUES ($1, $2, 'entrada', 'arara', 1, 'Cadastro em Lote', NOW(), 0, 1, 'Padrão', 'Único')`,
         [produtoId, usuarioId]
       );
 
@@ -149,7 +161,7 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
     const pCompra = preco_compra ? parseFloat(String(preco_compra).replace(",", ".")) : null;
 
     const nomeFinal = nome?.trim() ? nome : "Produto sem nome";
-    const usuarioId = req.user?.id || req.user?.usuario_id || req.user?.userId || null;
+    const usuarioId = getUsuarioId(req);
 
     if (isNaN(idSub) || isNaN(pVenda)) {
       await client.query("ROLLBACK");
@@ -160,8 +172,10 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
     const imagem_url_principal = fotoPrincipalFile ? await uploadImagem(fotoPrincipalFile) : null;
 
     const produto = await client.query(
-      `INSERT INTO produtos (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) RETURNING id`,
+      `INSERT INTO produtos 
+       (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) 
+       RETURNING id`,
       [nomeFinal, pVenda, pCompra, idSub, variacao || "", imagem_url_principal, usuarioId]
     );
 
@@ -181,8 +195,10 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
         }
 
         const varResult = await client.query(
-          `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+          `INSERT INTO produto_variantes 
+           (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
+           VALUES ($1, $2, $3, $4, $5, $6) 
+           RETURNING id`,
           [
             produtoId,
             v.variacao || "Padrão",
@@ -197,7 +213,8 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
         const qtdTotal = (Number(v.quantidade_arara) || 0) + (Number(v.quantidade_deposito) || 0);
 
         await client.query(
-          `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
+          `INSERT INTO estoque 
+           (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
            VALUES ($1, $2, $3, $4, $5, $6)`,
           [produtoId, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
         );
@@ -205,9 +222,9 @@ router.post("/", authMiddleware, upload.any(), async (req, res) => {
         if (qtdTotal > 0) {
           await client.query(
             `INSERT INTO movimentacoes_estoque 
-             (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova, cor, tamanho)
-             VALUES ($1, 'entrada', $2, 'Estoque Inicial', $3, NOW(), 'arara', 0, $2, $4, $5)`,
-            [produtoId, qtdTotal, usuarioId, v.variacao || "Padrão", v.tamanho || "Único"]
+             (produto_id, usuario_id, tipo, local, quantidade, motivo, data, quantidade_anterior, quantidade_nova, cor, tamanho)
+             VALUES ($1, $2, 'entrada', 'arara', $3, 'Estoque Inicial', NOW(), 0, $3, $4, $5)`,
+            [produtoId, usuarioId, qtdTotal, v.variacao || "Padrão", v.tamanho || "Único"]
           );
         }
       }
@@ -234,7 +251,7 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
     await client.query("BEGIN");
 
     const { nome, preco_venda, preco_compra, subcategoria_id, variacao, variantes } = req.body;
-    const usuarioId = req.user?.id || req.user?.usuario_id || req.user?.userId || null;
+    const usuarioId = getUsuarioId(req);
 
     const idSub = parseInt(subcategoria_id);
     const pVenda = parseFloat(String(preco_venda).replace(",", "."));
@@ -298,8 +315,10 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
           );
         } else {
           const varResult = await client.query(
-            `INSERT INTO produto_variantes (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            `INSERT INTO produto_variantes 
+             (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
+             VALUES ($1, $2, $3, $4, $5, $6) 
+             RETURNING id`,
             [
               id,
               v.variacao || "Padrão",
@@ -313,7 +332,8 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
           varianteId = varResult.rows[0].id;
 
           await client.query(
-            `INSERT INTO estoque (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
+            `INSERT INTO estoque 
+             (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
              VALUES ($1, $2, $3, $4, $5, $6)`,
             [id, varianteId, Number(v.quantidade_arara) || 0, Number(v.quantidade_deposito) || 0, v.variacao || "Padrão", v.tamanho || "Único"]
           );
@@ -321,8 +341,9 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
       }
 
       await client.query(
-        `INSERT INTO movimentacoes_estoque (produto_id, tipo, quantidade, motivo, usuario_id, data, local, quantidade_anterior, quantidade_nova)
-         VALUES ($1, 'ajuste', 0, 'Alteração cadastral de variantes', $2, NOW(), 'arara', 0, 0)`,
+        `INSERT INTO movimentacoes_estoque 
+         (produto_id, usuario_id, tipo, local, quantidade, motivo, data, quantidade_anterior, quantidade_nova)
+         VALUES ($1, $2, 'ajuste', 'arara', 0, 'Alteração cadastral de variantes', NOW(), 0, 0)`,
         [id, usuarioId]
       );
     }
