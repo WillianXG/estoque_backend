@@ -28,8 +28,10 @@ app.use(express.json());
 app.use("/auth", authRoutes);
 app.use("/categorias", categoriasRoutes);
 app.use("/subcategorias", subcategoriasRoutes);
-app.use("/produtos/lote", loteRouter); // <--- MUDANÇA AQUI
-app.use("/produtos", produtosRoutes);
+
+// Deixe APENAS essa rota para produtos (ela já cuida de / e de /lote internamente)
+app.use("/produtos", produtosRoutes); 
+
 app.use("/vendas", vendasRoutes);
 app.use("/estoque", estoqueRoutes);
 app.use("/movimentacoes-estoque", estoqueMovimentacaoRoutes);
@@ -37,6 +39,7 @@ app.use("/vendedoras", vendedorasRoutes);
 app.use("/dashboard", dashboardRoutes);
 app.use("/frete", freteRouter);
 app.use("/caixa", caixaRouter);
+// REMOVA a linha: app.use("/lote", loteRouter) ou app.use("/produtos/lote", loteRouter)
 
 /* =========================
    ROTA TESTE / HEALTHCHECK
