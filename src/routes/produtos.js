@@ -82,10 +82,14 @@ router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, r
     // 2. Transação única
     await client.query("BEGIN");
     const produtosCriados = [];
+    const timestampBatch = Date.now().toString().slice(-4); // Garante unicidade mesmo em lotes simultâneos
 
     for (let i = 0; i < files.length; i++) {
       const imagemUrl = imagensUrls[i] || "";
-      const nomeProduto = "Produto sem nome";
+      
+      // Nome e variação dinâmicos para respeitar a constraint 'unico_produto (nome, variacao)'
+      const nomeProduto = `Produto Lote ${timestampBatch}-${i + 1}`;
+      const variacaoProduto = `Padrão ${i + 1}`;
 
       // INSERT em 'produtos'
       const prodRes = await client.query(
@@ -93,7 +97,7 @@ router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, r
          (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) 
          RETURNING id`,
-        [nomeProduto, pVenda, pCompra, idSub, "Padrão", imagemUrl, usuarioId]
+        [nomeProduto, pVenda, pCompra, idSub, variacaoProduto, imagemUrl, usuarioId]
       );
 
       const produtoId = prodRes.rows[0].id;
@@ -102,9 +106,9 @@ router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, r
       const varRes = await client.query(
         `INSERT INTO produto_variantes 
          (produto_id, variacao, tamanho, quantidade_arara, quantidade_deposito, imagem_url)
-         VALUES ($1, 'Padrão', 'Único', 1, 0, $2) 
+         VALUES ($1, $2, 'Único', 1, 0, $3) 
          RETURNING id`,
-        [produtoId, imagemUrl]
+        [produtoId, variacaoProduto, imagemUrl]
       );
 
       const varianteId = varRes.rows[0].id;
@@ -113,16 +117,16 @@ router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, r
       await client.query(
         `INSERT INTO estoque 
          (produto_id, produto_variacao_id, quantidade_arara, quantidade_deposito, cor, tamanho)
-         VALUES ($1, $2, 1, 0, 'Padrão', 'Único')`,
-        [produtoId, varianteId]
+         VALUES ($1, $2, 1, 0, $3, 'Único')`,
+        [produtoId, varianteId, variacaoProduto]
       );
 
-      // INSERT em 'movimentacoes_estoque' (usuario_id não pode ser NULL)
+      // INSERT em 'movimentacoes_estoque'
       await client.query(
         `INSERT INTO movimentacoes_estoque 
          (produto_id, usuario_id, tipo, local, quantidade, motivo, data, quantidade_anterior, quantidade_nova, cor, tamanho)
-         VALUES ($1, $2, 'entrada', 'arara', 1, 'Cadastro em Lote', NOW(), 0, 1, 'Padrão', 'Único')`,
-        [produtoId, usuarioId]
+         VALUES ($1, $2, 'entrada', 'arara', 1, 'Cadastro em Lote', NOW(), 0, 1, $3, 'Único')`,
+        [produtoId, usuarioId, variacaoProduto]
       );
 
       produtosCriados.push(produtoId);
