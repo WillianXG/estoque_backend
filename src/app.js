@@ -12,6 +12,7 @@ import estoqueRoutes from "./routes/estoque.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import freteRouter from "./routes/frete.js";
 import caixaRouter from "./routes/caixa.js";
+import loteRouter from "./routes/lote.js";
 
 const app = express();
 
@@ -27,6 +28,7 @@ app.use(express.json());
 app.use("/auth", authRoutes);
 app.use("/categorias", categoriasRoutes);
 app.use("/subcategorias", subcategoriasRoutes);
+app.use("/produtos/lote", loteRouter); // <--- MUDANÇA AQUI
 app.use("/produtos", produtosRoutes);
 app.use("/vendas", vendasRoutes);
 app.use("/estoque", estoqueRoutes);
