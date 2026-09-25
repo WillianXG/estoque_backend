@@ -102,7 +102,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 /**
- * 📖 Histórico de vendas do PDV
+ * 📖 Histórico de vendas do PDV (Retorna Imagem, Categoria e Subcategoria)
  * GET /vendas
  */
 router.get("/", authMiddleware, async (req, res) => {
@@ -120,6 +120,9 @@ router.get("/", authMiddleware, async (req, res) => {
           json_build_object(
             'produto_id', vi.produto_id,
             'produto_nome', p.nome,
+            'subcategoria_nome', s.nome,
+            'categoria_nome', c.nome,
+            'imagem_url', COALESCE(p.imagem_url, ''),
             'quantidade', vi.quantidade,
             'preco_unitario', vi.preco_unitario
           )
@@ -127,6 +130,8 @@ router.get("/", authMiddleware, async (req, res) => {
       FROM vendas v
       LEFT JOIN venda_itens vi ON vi.venda_id = v.id
       LEFT JOIN produtos p ON p.id = vi.produto_id
+      LEFT JOIN subcategorias s ON s.id = p.subcategoria_id
+      LEFT JOIN categorias c ON c.id = s.categoria_id
       GROUP BY v.id
       ORDER BY v.data DESC
       `
@@ -139,7 +144,7 @@ router.get("/", authMiddleware, async (req, res) => {
 });
 
 /**
- * 🛍️ Buscar Pedidos On-line
+ * 🛍️ Buscar Pedidos On-line (Retorna Imagem, Categoria e Subcategoria)
  * GET /vendas/pedidos-online
  */
 router.get("/pedidos-online", authMiddleware, async (req, res) => {
@@ -158,12 +163,18 @@ router.get("/pedidos-online", authMiddleware, async (req, res) => {
                 'tamanho', poi.tamanho,
                 'quantidade', poi.quantidade,
                 'preco_unitario', poi.preco_unitario,
-                'nome_produto', p.nome
+                'nome_produto', p.nome,
+                'subcategoria_nome', s.nome,
+                'categoria_nome', c.nome,
+                'imagem_url', COALESCE(pv.imagem_url, p.imagem_url, '')
               )
             ), '[]'::json
           ) AS pedidos_online_itens
         FROM pedidos_online_itens poi
         LEFT JOIN produtos p ON p.id = poi.produto_id
+        LEFT JOIN subcategorias s ON s.id = p.subcategoria_id
+        LEFT JOIN categorias c ON c.id = s.categoria_id
+        LEFT JOIN produto_variantes pv ON pv.produto_id = p.id AND (pv.variacao = poi.cor OR poi.cor IS NULL)
         GROUP BY poi.pedido_online_id
       )
       SELECT 
@@ -177,14 +188,13 @@ router.get("/pedidos-online", authMiddleware, async (req, res) => {
 
     res.json(pedidosRes.rows);
   } catch (err) {
-    // Exibe o erro exato do PostgreSQL nos logs do Render
     console.error("❌ ERRO NO BANCO DE DADOS (pedidos-online):", err.message);
     res.status(500).json({ erro: err.message });
   }
 });
 
 /**
- * 📦 Atualizar Status do Pedido (Ex: AGUARDANDO_PIX, PAGO, EMBALANDO, ENVIADO, CANCELADO)
+ * 📦 Atualizar Status do Pedido
  * PATCH /vendas/pedidos-online/:id/status
  */
 router.patch("/pedidos-online/:id/status", authMiddleware, async (req, res) => {
