@@ -45,6 +45,44 @@ function getUsuarioId(req) {
 }
 
 /* ============================================================
+   EXCLUIR / DESATIVAR PRODUTOS EM MASSA (POST /excluir-massa)
+============================================================ */
+router.post("/excluir-massa", authMiddleware, async (req, res) => {
+  const client = await db.connect();
+  try {
+    const { ids } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ erro: "Lista de IDs inválida ou vazia." });
+    }
+
+    await client.query("BEGIN");
+
+    // Desativa todos os produtos da lista de IDs fornecida
+    await client.query(
+      "UPDATE produtos SET ativo = false WHERE id = ANY($1::int[])",
+      [ids]
+    );
+
+    await client.query("COMMIT");
+
+    return res.json({ 
+      mensagem: `${ids.length} produtos desativados com sucesso.`,
+      ids 
+    });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK");
+    console.error("ERRO NO POST /excluir-massa:", err.message);
+    return res.status(500).json({ 
+      erro: "Erro ao excluir produtos em massa", 
+      detalhes: err.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+/* ============================================================
    CADASTRO EM LOTE (POST /lote)
 ============================================================ */
 router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, res) => {
@@ -427,7 +465,7 @@ router.get("/", authMiddleware, async (req, res) => {
 });
 
 /* ============================================================
-   DESATIVAR PRODUTO (DELETE)
+   DESATIVAR PRODUTO INDIVIDUAL (DELETE)
 ============================================================ */
 router.delete("/:id", authMiddleware, async (req, res) => {
   try {
