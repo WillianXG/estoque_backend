@@ -368,26 +368,50 @@ router.put("/:id", authMiddleware, upload.any(), async (req, res) => {
 ============================================================ */
 router.get("/", authMiddleware, async (req, res) => {
   try {
-    const result = await db.query(`
-      SELECT p.*,
-      COALESCE(
-        json_agg(
-          json_build_object(
-            'id', v.id,
-            'variacao', v.variacao,
-            'tamanho', v.tamanho,
-            'quantidade_arara', v.quantidade_arara,
-            'quantidade_deposito', v.quantidade_deposito,
-            'imagem_url', v.imagem_url
-          )
-        ) FILTER (WHERE v.id IS NOT NULL), '[]'
-      ) as variantes
+    const { subcategoria_id, categoria_id } = req.query;
+
+    let queryText = `
+      SELECT 
+        p.*,
+        s.nome AS subcategoria_nome,
+        s.categoria_id,
+        c.nome AS categoria_nome,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', v.id,
+              'variacao', v.variacao,
+              'tamanho', v.tamanho,
+              'quantidade_arara', v.quantidade_arara,
+              'quantidade_deposito', v.quantidade_deposito,
+              'imagem_url', v.imagem_url
+            )
+          ) FILTER (WHERE v.id IS NOT NULL), '[]'
+        ) as variantes
       FROM produtos p
       LEFT JOIN produto_variantes v ON v.produto_id = p.id
+      LEFT JOIN subcategorias s ON s.id = p.subcategoria_id
+      LEFT JOIN categorias c ON c.id = s.categoria_id
       WHERE p.ativo = true
-      GROUP BY p.id
-      ORDER BY p.id DESC;
-    `);
+    `;
+
+    const queryParams = [];
+
+    // Filtro dinâmico por subcategoria
+    if (subcategoria_id) {
+      queryParams.push(subcategoria_id);
+      queryText += ` AND p.subcategoria_id = $${queryParams.length}`;
+    }
+
+    // Filtro dinâmico por categoria pai
+    if (categoria_id) {
+      queryParams.push(categoria_id);
+      queryText += ` AND s.categoria_id = $${queryParams.length}`;
+    }
+
+    queryText += ` GROUP BY p.id, s.id, c.id ORDER BY p.id DESC;`;
+
+    const result = await db.query(queryText, queryParams);
 
     const rows = result.rows.map((row) => ({
       ...row,
