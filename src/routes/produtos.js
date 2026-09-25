@@ -79,16 +79,18 @@ router.post("/lote", authMiddleware, upload.array("imagens", 100), async (req, r
       })
     );
 
-    // 2. Transação única
+    // 2. Busca o nome da subcategoria para usar no nome do produto
+    const subRes = await client.query("SELECT nome FROM subcategorias WHERE id = $1", [idSub]);
+    const nomeSubcategoria = subRes.rows[0]?.nome || "Produto";
+
+    // 3. Transação única
     await client.query("BEGIN");
     const produtosCriados = [];
-    const timestampBatch = Date.now().toString().slice(-4); // Garante unicidade mesmo em lotes simultâneos
 
     for (let i = 0; i < files.length; i++) {
       const imagemUrl = imagensUrls[i] || "";
       
-      // Nome e variação dinâmicos para respeitar a constraint 'unico_produto (nome, variacao)'
-      const nomeProduto = `Produto Lote ${timestampBatch}-${i + 1}`;
+      const nomeProduto = `${nomeSubcategoria} ${i + 1}`;
       const variacaoProduto = `Padrão ${i + 1}`;
 
       // INSERT em 'produtos'
@@ -397,13 +399,11 @@ router.get("/", authMiddleware, async (req, res) => {
 
     const queryParams = [];
 
-    // Filtro dinâmico por subcategoria
     if (subcategoria_id) {
       queryParams.push(subcategoria_id);
       queryText += ` AND p.subcategoria_id = $${queryParams.length}`;
     }
 
-    // Filtro dinâmico por categoria pai
     if (categoria_id) {
       queryParams.push(categoria_id);
       queryText += ` AND s.categoria_id = $${queryParams.length}`;
