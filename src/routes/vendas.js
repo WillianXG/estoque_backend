@@ -1,8 +1,15 @@
 import { Router } from "express";
 import db from "../db.js";
 import { authMiddleware } from "./auth.js";
+import { receberWebhookMercadoPago } from "../controllers/ecommerceController.js"; // Ajuste o caminho se seu controller tiver outro nome/pasta
 
 const router = Router();
+
+/**
+ * 🔔 Webhook do Mercado Pago (Recebe notificações automáticas do PIX)
+ * POST /vendas/webhook
+ */
+router.post("/webhook", receberWebhookMercadoPago);
 
 /**
  * 🛒 Finalizar venda (PDV / Loja Física)
@@ -102,7 +109,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 /**
- * 📖 Histórico de vendas do PDV (Retorna Imagem, Categoria e Subcategoria)
+ * 📖 Histórico de vendas do PDV
  * GET /vendas
  */
 router.get("/", authMiddleware, async (req, res) => {
@@ -144,7 +151,7 @@ router.get("/", authMiddleware, async (req, res) => {
 });
 
 /**
- * 🛍️ Buscar Pedidos On-line (Retorna Imagem, Categoria e Subcategoria)
+ * 🛍️ Buscar Pedidos On-line
  * GET /vendas/pedidos-online
  */
 router.get("/pedidos-online", authMiddleware, async (req, res) => {
