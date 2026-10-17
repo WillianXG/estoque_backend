@@ -1,13 +1,6 @@
 import { Router } from "express";
 import db from "../db.js";
 import { authMiddleware } from "./auth.js";
-import { MercadoPagoConfig, Payment } from "mercadopago";
-
-// Inicializa a SDK do Mercado Pago usando as variáveis de ambiente
-const client = new MercadoPagoConfig({
-  accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN,
-});
-const payment = new Payment(client);
 
 const router = Router();
 
@@ -21,22 +14,31 @@ router.post("/webhook", async (req, res) => {
 
     if (type === "payment" && data?.id) {
       const paymentId = data.id;
+      const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
 
-      // Consulta o status real na API do Mercado Pago
-      const mpPayment = await payment.get({ id: paymentId });
+      // Consulta o status real na API do Mercado Pago via fetch nativo
+      const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
 
-      if (mpPayment.status === "approved") {
-        const pedidoId = mpPayment.external_reference;
+      if (mpResponse.ok) {
+        const mpPayment = await mpResponse.json();
 
-        // Atualiza o pedido na base de dados
-        await db.query(
-          `UPDATE pedidos_online 
-           SET status = 'PAGO', data_atualizacao = NOW() 
-           WHERE id = $1`,
-          [pedidoId]
-        );
+        if (mpPayment.status === "approved") {
+          const pedidoId = mpPayment.external_reference;
 
-        console.log(`✅ Pedido #${pedidoId} confirmado como PAGO via Webhook!`);
+          // Atualiza o pedido na base de dados PostgreSQL
+          await db.query(
+            `UPDATE pedidos_online 
+             SET status = 'PAGO', data_atualizacao = NOW() 
+             WHERE id = $1`,
+            [pedidoId]
+          );
+
+          console.log(`✅ Pedido #${pedidoId} confirmado como PAGO via Webhook!`);
+        }
       }
     }
 
