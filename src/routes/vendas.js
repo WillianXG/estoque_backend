@@ -10,38 +10,39 @@ const router = Router();
  */
 router.post("/webhook", async (req, res) => {
   try {
-    const { type, data } = req.body;
+    const { type, data, action } = req.body;
 
-    if (type === "payment" && data?.id) {
-      const paymentId = data.id;
+    // Trata notificações de pagamento
+    if (type === "payment" || action?.includes("payment")) {
+      const paymentId = data?.id || req.body?.id;
       const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
 
-      // Consulta o status real na API do Mercado Pago via fetch nativo
-      const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      });
+      if (paymentId && accessToken) {
+        // Consulta o status atual do pagamento no Mercado Pago
+        const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
 
-      if (mpResponse.ok) {
-        const mpPayment = await mpResponse.json();
+        if (mpResponse.ok) {
+          const mpPayment = await mpResponse.json();
 
-        if (mpPayment.status === "approved") {
-          const pedidoId = mpPayment.external_reference;
+          if (mpPayment.status === "approved" && mpPayment.external_reference) {
+            const pedidoId = mpPayment.external_reference;
 
-          // Atualiza o pedido na base de dados PostgreSQL
-          await db.query(
-            `UPDATE pedidos_online 
-             SET status = 'PAGO', data_atualizacao = NOW() 
-             WHERE id = $1`,
-            [pedidoId]
-          );
+            await db.query(
+              `UPDATE pedidos_online 
+               SET status = 'PAGO', data_atualizacao = NOW() 
+               WHERE id = $1`,
+              [pedidoId]
+            );
 
-          console.log(`✅ Pedido #${pedidoId} confirmado como PAGO via Webhook!`);
+            console.log(`✅ Pedido #${pedidoId} confirmado como PAGO via Webhook!`);
+          }
         }
       }
     }
 
+    // Retorna 200 sempre para o Mercado Pago dar como recebido com sucesso
     res.status(200).send("OK");
   } catch (err) {
     console.error("❌ Erro no processamento do Webhook:", err.message);
