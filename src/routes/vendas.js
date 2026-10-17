@@ -1,7 +1,13 @@
 import { Router } from "express";
 import db from "../db.js";
 import { authMiddleware } from "./auth.js";
-import { payment } from "../config/mercadopago.js"; // Certifica-te que o SDK do Mercado Pago está exportado neste caminho
+import { MercadoPagoConfig, Payment } from "mercadopago";
+
+// Inicializa a SDK do Mercado Pago usando as variáveis de ambiente
+const client = new MercadoPagoConfig({
+  accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN,
+});
+const payment = new Payment(client);
 
 const router = Router();
 
@@ -16,13 +22,13 @@ router.post("/webhook", async (req, res) => {
     if (type === "payment" && data?.id) {
       const paymentId = data.id;
 
-      // Consulta o status real do pagamento na API do Mercado Pago
+      // Consulta o status real na API do Mercado Pago
       const mpPayment = await payment.get({ id: paymentId });
 
       if (mpPayment.status === "approved") {
         const pedidoId = mpPayment.external_reference;
 
-        // Atualiza o status do pedido para PAGO no PostgreSQL/Supabase via db.query
+        // Atualiza o pedido na base de dados
         await db.query(
           `UPDATE pedidos_online 
            SET status = 'PAGO', data_atualizacao = NOW() 
@@ -34,7 +40,6 @@ router.post("/webhook", async (req, res) => {
       }
     }
 
-    // Retorna sempre 200 OK para o Mercado Pago não refazer tentativas sem necessidade
     res.status(200).send("OK");
   } catch (err) {
     console.error("❌ Erro no processamento do Webhook:", err.message);
@@ -57,17 +62,17 @@ router.post("/", authMiddleware, async (req, res) => {
     return res.status(400).json({ erro: "Nenhum item na venda" });
   }
 
-  const client = await db.connect();
+  const clientDb = await db.connect();
 
   try {
-    await client.query("BEGIN");
+    await clientDb.query("BEGIN");
 
     const valorTotal = itens.reduce(
       (sum, item) => sum + Number(item.preco) * Number(item.quantidade),
       0
     );
 
-    const vendaRes = await client.query(
+    const vendaRes = await clientDb.query(
       `
       INSERT INTO vendas
       (vendedora_id, canal, data, valor_total, forma_pagamento, observacoes)
@@ -80,7 +85,7 @@ router.post("/", authMiddleware, async (req, res) => {
     const vendaId = vendaRes.rows[0].id;
 
     for (const item of itens) {
-      const estoqueRes = await client.query(
+      const estoqueRes = await clientDb.query(
         `SELECT quantidade_arara, quantidade_deposito FROM estoque WHERE produto_id = $1`,
         [item.produto_id]
       );
@@ -94,7 +99,7 @@ router.post("/", authMiddleware, async (req, res) => {
         if (estoqueRes.rows[0].quantidade_deposito < item.quantidade) {
           throw new Error(`Estoque insuficiente no depósito para produto ID ${item.produto_id}`);
         }
-        await client.query(
+        await clientDb.query(
           `UPDATE estoque SET quantidade_deposito = quantidade_deposito - $1 WHERE produto_id = $2`,
           [item.quantidade, item.produto_id]
         );
@@ -103,13 +108,13 @@ router.post("/", authMiddleware, async (req, res) => {
         if (estoqueRes.rows[0].quantidade_arara < item.quantidade) {
           throw new Error(`Estoque insuficiente na arara para produto ID ${item.produto_id}`);
         }
-        await client.query(
+        await clientDb.query(
           `UPDATE estoque SET quantidade_arara = quantidade_arara - $1 WHERE produto_id = $2`,
           [item.quantidade, item.produto_id]
         );
       }
 
-      await client.query(
+      await clientDb.query(
         `
         INSERT INTO venda_itens
         (venda_id, produto_id, quantidade, preco_unitario)
@@ -118,7 +123,7 @@ router.post("/", authMiddleware, async (req, res) => {
         [vendaId, item.produto_id, item.quantidade, item.preco]
       );
 
-      await client.query(
+      await clientDb.query(
         `
         INSERT INTO movimentacoes_estoque
         (produto_id, usuario_id, tipo, local, quantidade, motivo, data)
@@ -128,14 +133,14 @@ router.post("/", authMiddleware, async (req, res) => {
       );
     }
 
-    await client.query("COMMIT");
+    await clientDb.query("COMMIT");
 
     res.status(201).json({ venda_id: vendaId, mensagem: "Venda realizada com sucesso!" });
   } catch (err) {
-    await client.query("ROLLBACK");
+    await clientDb.query("ROLLBACK");
     res.status(500).json({ erro: err.message });
   } finally {
-    client.release();
+    clientDb.release();
   }
 });
 
