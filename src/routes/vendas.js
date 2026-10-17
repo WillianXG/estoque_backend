@@ -11,14 +11,19 @@ const router = Router();
 router.post("/webhook", async (req, res) => {
   try {
     const { type, data, action } = req.body;
+    const paymentId = data?.id || req.body?.id;
 
-    // Trata notificações de pagamento
-    if (type === "payment" || action?.includes("payment")) {
-      const paymentId = data?.id || req.body?.id;
+    // Se for uma simulação de teste com o ID fictício do Mercado Pago
+    if (paymentId === "123456") {
+      console.log("🔔 Simulação de teste do Mercado Pago recebida com sucesso!");
+      return res.status(200).send("OK");
+    }
+
+    if ((type === "payment" || action?.includes("payment")) && paymentId) {
       const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
 
-      if (paymentId && accessToken) {
-        // Consulta o status atual do pagamento no Mercado Pago
+      if (accessToken) {
+        // Consulta o status real na API do Mercado Pago
         const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
@@ -38,15 +43,19 @@ router.post("/webhook", async (req, res) => {
 
             console.log(`✅ Pedido #${pedidoId} confirmado como PAGO via Webhook!`);
           }
+        } else {
+          console.error(`⚠️ Erro ao consultar Mercado Pago (${mpResponse.status}):`, await mpResponse.text());
         }
+      } else {
+        console.error("❌ MERCADOPAGO_ACCESS_TOKEN não configurado nas variáveis de ambiente!");
       }
     }
 
-    // Retorna 200 sempre para o Mercado Pago dar como recebido com sucesso
+    // Retorna sempre 200 para o Mercado Pago confirmar a entrega do webhook
     res.status(200).send("OK");
   } catch (err) {
     console.error("❌ Erro no processamento do Webhook:", err.message);
-    res.status(200).send("OK com erro interno");
+    res.status(200).send("OK");
   }
 });
 
