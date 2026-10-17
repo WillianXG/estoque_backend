@@ -1,7 +1,7 @@
 import { Router } from "express";
 import db from "../db.js";
 import { authMiddleware } from "./auth.js";
-import { receberWebhookMercadoPago } from "../controllers/ecommerceController.js"; // Ajuste o caminho se seu controller tiver outro nome/pasta
+import { payment } from "../config/mercadopago.js"; // Certifica-te que o SDK do Mercado Pago está exportado neste caminho
 
 const router = Router();
 
@@ -9,7 +9,38 @@ const router = Router();
  * 🔔 Webhook do Mercado Pago (Recebe notificações automáticas do PIX)
  * POST /vendas/webhook
  */
-router.post("/webhook", receberWebhookMercadoPago);
+router.post("/webhook", async (req, res) => {
+  try {
+    const { type, data } = req.body;
+
+    if (type === "payment" && data?.id) {
+      const paymentId = data.id;
+
+      // Consulta o status real do pagamento na API do Mercado Pago
+      const mpPayment = await payment.get({ id: paymentId });
+
+      if (mpPayment.status === "approved") {
+        const pedidoId = mpPayment.external_reference;
+
+        // Atualiza o status do pedido para PAGO no PostgreSQL/Supabase via db.query
+        await db.query(
+          `UPDATE pedidos_online 
+           SET status = 'PAGO', data_atualizacao = NOW() 
+           WHERE id = $1`,
+          [pedidoId]
+        );
+
+        console.log(`✅ Pedido #${pedidoId} confirmado como PAGO via Webhook!`);
+      }
+    }
+
+    // Retorna sempre 200 OK para o Mercado Pago não refazer tentativas sem necessidade
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ Erro no processamento do Webhook:", err.message);
+    res.status(200).send("OK com erro interno");
+  }
+});
 
 /**
  * 🛒 Finalizar venda (PDV / Loja Física)
