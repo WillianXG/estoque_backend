@@ -2,19 +2,19 @@ import { Router } from "express";
 import db from "../db.js";
 import { authMiddleware } from "./auth.js";
 import multer from "multer";
-import { uploadImagem } from "../services/storage.js"; // Ou a sua função de upload
+import { uploadImagem } from "../services/storage.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
 const router = Router();
 
 /* ============================================================
-   CADASTRO EM LOTE
-   Atende a requisição em POST na raiz do roteador de lote
+    CADASTRO EM LOTE
+    Atende a requisição em POST na raiz do roteador de lote
 ============================================================ */
 router.post("/", authMiddleware, upload.array("imagens", 100), async (req, res) => {
   const client = await db.connect();
   try {
-    const { subcategoria_id, preco_venda, preco_compra } = req.body;
+    const { subcategoria_id, preco_venda, preco_compra, categoria_id } = req.body;
     const files = req.files;
 
     if (!files || files.length === 0) {
@@ -32,7 +32,16 @@ router.post("/", authMiddleware, upload.array("imagens", 100), async (req, res) 
     // Pega o ID do usuário vindo do token JWT ou usa 1 como padrão
     const usuarioId = req.user?.id || req.user?.usuario_id || 1;
 
-    // 1. Faz o upload das imagens para o Supabase Storage em paralelo
+    // 1. Busca o nome da subcategoria para usar como prefixo do produto
+    const subcatRes = await client.query("SELECT nome FROM subcategorias WHERE id = $1", [idSub]);
+    const nomeBaseSubcategoria = subcatRes.rows.length > 0 ? subcatRes.rows[0].nome : "Produto";
+
+    // 2. Conta quantos produtos já existem nessa subcategoria para continuar a numeração sequencial
+    const countRes = await client.query("SELECT COUNT(*) FROM produtos WHERE subcategoria_id = $1", [idSub]);
+    const quantidadeExistente = parseInt(countRes.rows[0].count, 10) || 0;
+    const proximoNumeroInicial = quantidadeExistente + 1;
+
+    // 3. Faz o upload das imagens para o Supabase Storage em paralelo
     const imagensUrls = await Promise.all(
       files.map(async (file) => {
         try {
@@ -44,21 +53,24 @@ router.post("/", authMiddleware, upload.array("imagens", 100), async (req, res) 
       })
     );
 
-    // 2. Abre transação no PostgreSQL
+    // 4. Abre transação no PostgreSQL
     await client.query("BEGIN");
     const produtosCriados = [];
 
     for (let i = 0; i < files.length; i++) {
       const imagemUrl = imagensUrls[i] || "";
-      const nomeProduto = "Produto sem nome";
+      
+      // Gera o nome sequencial correto (ex: Conjunto saia curta 4, 5, 6...)
+      const numeroAtual = proximoNumeroInicial + i;
+      const nomeProduto = `${nomeBaseSubcategoria} ${numeroAtual}`;
 
       // Insert na tabela produtos
       const prodRes = await client.query(
         `INSERT INTO produtos 
-         (nome, preco_venda, preco_compra, subcategoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), true) 
+         (nome, preco_venda, preco_compra, subcategoria_id, categoria_id, variacao, imagem_url, criado_por, data_criacao, ativo)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), true) 
          RETURNING id`,
-        [nomeProduto, pVenda, pCompra, idSub, "Padrão", imagemUrl, usuarioId]
+        [nomeProduto, pVenda, pCompra, idSub, categoria_id || null, "Padrão", imagemUrl, usuarioId]
       );
 
       const produtoId = prodRes.rows[0].id;
